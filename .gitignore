@@ -167,3 +167,4 @@ gpt2
 gpt2/**
 .mypy_cache
 debug_tensors
+node_modules

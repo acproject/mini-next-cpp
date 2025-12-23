@@ -1,0 +1,68 @@
+{
+  "name": "mini-next-cpp",
+  "version": "1.0.0",
+  "description": "基于C++的小型NextJs的框架",
+  "keywords": [
+    "C++",
+    "React",
+    "NextJs"
+  ],
+  "license": "MIT",
+  "author": "acproject@qq.com",
+  "type": "commonjs",
+  "main": "js/server.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "prebuild": "npm run build:cpp",
+    "build:cpp": "node-gyp configure build",
+    "build:cpp-debug": "node-gyp configure build --debug",
+    "build:cpp-release": "node-gyp configure build --release",
+    "build:cpp-clean": "node-gyp clean",
+    "rebuild": "npm run build:cpp-clean && npm run build:cpp",
+    "test:cpp": "npm run build:cpp && node test/cpp-test.js",
+    "benchmark": "npm run build:cpp && node benchmark/index.js",
+    "dev": "nodemon --watch pages --watch js --watch src --ext js,jsx,cpp,hpp --exec \"npm run build:cpp && node js/server.js\""
+  },
+  "gypfile": true,
+  "binary": {
+    "module_name": "mini_next",
+    "module_path": "./build/Release",
+    "host": "https://github.com/acproject/mini-next-cpp.git/releases/download/",
+    "remote_path": "./v{version}",
+    "package_name": "{module_name}-v{version}-{node_abi}-{platform}-{arch}.tar.gz",
+    "napi_versions": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ]
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "node-addon-api": "^8.5.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.28.3",
+    "@babel/preset-env": "7.28.5",
+    "@babel/preset-react": "^7.28.5",
+    "@babel/register": "^7.28.3",
+    "benchmark": "^2.1.4",
+    "chai": "^6.2.2",
+    "mocha": "^11.7.5",
+    "node-gyp": "12.1.0",
+    "nodemon": "^3.1.11"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "src/cpp",
+    "src/node",
+    "binding.gyp",
+    "dist/"
+  ]
+}
