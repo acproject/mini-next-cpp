@@ -26,13 +26,19 @@ static bool getValueString(napi_env env, napi_value value, std::string &out) {
 }
 
 std::string reactRenderToString(napi_env env, const std::string &modulePath,
-                               const std::string &propsJson) {
+                                const std::string &propsJson) {
   std::string script;
   script.reserve(modulePath.size() + propsJson.size() + 256);
   script.append("(() => {");
-  script.append("const React=require('react');");
-  script.append("const ReactDOMServer=require('react-dom/server');");
-  script.append("const mod=require(");
+  script.append("const "
+                "req=(process&&process.mainModule&&process.mainModule.require)?"
+                "process.mainModule.require.bind(process.mainModule):null;");
+  script.append(
+      "if(!req){throw new Error('require is not available in this context');}");
+  script.append("const React=req('react');");
+  script.append("const ReactDOMServer=req('react-dom/server');");
+  script.append("globalThis.__MINI_NEXT_REACT__=React;");
+  script.append("const mod=req(");
   script.push_back('`');
   for (char c : modulePath) {
     if (c == '`' || c == '\\') {
@@ -42,7 +48,9 @@ std::string reactRenderToString(napi_env env, const std::string &modulePath,
   }
   script.push_back('`');
   script.append(");");
-  script.append("const C=(mod&&mod.__esModule&&mod.default)?mod.default:(mod.default||mod);");
+  script.append(
+      "const "
+      "C=(mod&&mod.__esModule&&mod.default)?mod.default:(mod.default||mod);");
   script.append("const props=JSON.parse(");
   script.push_back('`');
   for (char c : propsJson.empty() ? std::string("{}") : propsJson) {
@@ -53,7 +61,8 @@ std::string reactRenderToString(napi_env env, const std::string &modulePath,
   }
   script.push_back('`');
   script.append(");");
-  script.append("return ReactDOMServer.renderToString(React.createElement(C, props));");
+  script.append(
+      "return ReactDOMServer.renderToString(React.createElement(C, props));");
   script.append("})()");
 
   napi_value jsScript;

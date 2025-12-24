@@ -19,9 +19,11 @@ function escapeJsonForHtml(value) {
     .replaceAll('\u2029', '\\u2029');
 }
 
-function renderDocument({ bodyHtml, pageData, title }) {
+function renderDocument({ bodyHtml, pageData, title, stylesHtml, scriptsHtml }) {
   const safeTitle = title ? escapeHtml(title) : 'mini-next-cpp';
   const data = escapeJsonForHtml(pageData ?? {});
+  const styles = stylesHtml ? String(stylesHtml) : '';
+  const scripts = scriptsHtml ? String(scriptsHtml) : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -29,10 +31,12 @@ function renderDocument({ bodyHtml, pageData, title }) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${safeTitle}</title>
+${styles}
   </head>
   <body>
     <div id="__next">${bodyHtml}</div>
     <script id="__MINI_NEXT_DATA__" type="application/json">${data}</script>
+${scripts}
   </body>
 </html>`;
 }
@@ -45,7 +49,9 @@ function renderPage(Component, props, options = {}) {
     bodyHtml,
     pageData: { props, route: options.route ?? null },
     title: options.title ?? null,
+    stylesHtml: options.stylesHtml ?? null,
+    scriptsHtml: options.scriptsHtml ?? null,
   });
 }
 
-module.exports = { renderPage };
+module.exports = { renderDocument, renderPage };

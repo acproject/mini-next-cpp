@@ -4,6 +4,9 @@
 #include "../cpp/renderer/react_renderer.hpp"
 #include "../cpp/router/route_matcher.hpp"
 
+#include <uv.h>
+
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -73,6 +76,164 @@ private:
 };
 
 Napi::FunctionReference RouteMatcherWrapper::constructor;
+
+struct FileEventPayload {
+  std::string path;
+  std::string filename;
+  int events;
+  int status;
+};
+
+class FileWatcherWrapper : public Napi::ObjectWrap<FileWatcherWrapper> {
+public:
+  static Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    Napi::Function func =
+        DefineClass(env, "FileWatcher",
+                    {InstanceMethod("start", &FileWatcherWrapper::Start),
+                     InstanceMethod("stop", &FileWatcherWrapper::Stop)});
+
+    constructor = Napi::Persistent(func);
+    constructor.SuppressDestruct();
+    exports.Set("FileWatcher", func);
+    return exports;
+  }
+
+  FileWatcherWrapper(const Napi::CallbackInfo &info)
+      : Napi::ObjectWrap<FileWatcherWrapper>(info), env_(info.Env()) {}
+
+  ~FileWatcherWrapper() { stopInternal(); }
+
+  FileWatcherWrapper(const FileWatcherWrapper &) = delete;
+  FileWatcherWrapper &operator=(const FileWatcherWrapper &) = delete;
+
+private:
+  static Napi::FunctionReference constructor;
+
+  Napi::Env env_;
+  std::string watchPath_;
+  uv_fs_event_t *handle_{nullptr};
+  bool started_{false};
+  Napi::ThreadSafeFunction tsfn_;
+
+  static void OnEvent(uv_fs_event_t *handle, const char *filename, int events,
+                      int status) {
+    auto *self = static_cast<FileWatcherWrapper *>(handle->data);
+    if (!self || !self->started_) {
+      return;
+    }
+
+    std::string filenameStr = filename ? std::string(filename) : std::string();
+    std::string fullPath;
+    if (!filenameStr.empty()) {
+      fullPath =
+          (std::filesystem::path(self->watchPath_) / filenameStr).string();
+    } else {
+      fullPath = self->watchPath_;
+    }
+
+    auto *payload = new FileEventPayload{
+        std::move(fullPath), std::move(filenameStr), events, status};
+    napi_status st = self->tsfn_.NonBlockingCall(
+        payload,
+        [](Napi::Env env, Napi::Function jsCallback, FileEventPayload *value) {
+          Napi::Object ev = Napi::Object::New(env);
+          ev.Set("path", Napi::String::New(env, value->path));
+          ev.Set("filename", Napi::String::New(env, value->filename));
+          ev.Set("events", Napi::Number::New(env, value->events));
+          ev.Set("status", Napi::Number::New(env, value->status));
+          jsCallback.Call({ev});
+          delete value;
+        });
+    if (st != napi_ok) {
+      delete payload;
+    }
+  }
+
+  void stopInternal() {
+    started_ = false;
+    if (handle_) {
+      uv_fs_event_stop(handle_);
+      uv_close(reinterpret_cast<uv_handle_t *>(handle_), [](uv_handle_t *h) {
+        delete reinterpret_cast<uv_fs_event_t *>(h);
+      });
+      handle_ = nullptr;
+    }
+    if (tsfn_) {
+      tsfn_.Abort();
+      tsfn_.Release();
+      tsfn_ = Napi::ThreadSafeFunction();
+    }
+  }
+
+  Napi::Value Stop(const Napi::CallbackInfo &info) {
+    stopInternal();
+    return info.Env().Undefined();
+  }
+
+  Napi::Value Start(const Napi::CallbackInfo &info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsString() || !info[1].IsFunction()) {
+      Napi::TypeError::New(env, "Expected (path: string, callback: function)")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+
+    stopInternal();
+
+    watchPath_ = info[0].As<Napi::String>().Utf8Value();
+    Napi::Function cb = info[1].As<Napi::Function>();
+    bool recursive = true;
+    if (info.Length() >= 3 && info[2].IsObject()) {
+      Napi::Object opts = info[2].As<Napi::Object>();
+      if (opts.Has("recursive")) {
+        recursive = opts.Get("recursive").ToBoolean().Value();
+      }
+    }
+
+    tsfn_ =
+        Napi::ThreadSafeFunction::New(env, cb, "FileWatcherCallback", 64, 1);
+
+    uv_loop_t *loop = nullptr;
+    napi_status nst = napi_get_uv_event_loop(env, &loop);
+    if (nst != napi_ok || loop == nullptr) {
+      stopInternal();
+      Napi::Error::New(env, "Failed to get libuv event loop")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+
+    handle_ = new uv_fs_event_t();
+    handle_->data = this;
+    int rc = uv_fs_event_init(loop, handle_);
+    if (rc != 0) {
+      stopInternal();
+      Napi::Error::New(env, uv_strerror(rc)).ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+
+    unsigned int flags = 0;
+#ifdef UV_FS_EVENT_RECURSIVE
+    if (recursive) {
+      flags |= UV_FS_EVENT_RECURSIVE;
+    }
+#else
+    (void)recursive;
+#endif
+
+    rc = uv_fs_event_start(handle_, &FileWatcherWrapper::OnEvent,
+                           watchPath_.c_str(), flags);
+    if (rc != 0) {
+      stopInternal();
+      Napi::Error::New(env, uv_strerror(rc)).ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+
+    started_ = true;
+    return env.Undefined();
+  }
+};
+
+Napi::FunctionReference FileWatcherWrapper::constructor;
 
 class SSRCacheWrapper : public Napi::ObjectWrap<SSRCacheWrapper> {
 public:
@@ -207,6 +368,7 @@ static Napi::Value RenderToString(const Napi::CallbackInfo &info) {
 
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
   RouteMatcherWrapper::Init(env, exports);
+  FileWatcherWrapper::Init(env, exports);
   SSRCacheWrapper::Init(env, exports);
   exports.Set("markdownToHtml", Napi::Function::New(env, MarkdownToHtml));
   exports.Set("renderTemplate", Napi::Function::New(env, RenderTemplate));
