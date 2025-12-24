@@ -48,23 +48,22 @@ async function resolvePageProps(mod, ctx) {
   return { params: ctx.params, query: ctx.query };
 }
 
-async function main() {
-  const port = Number(process.env.PORT || 3000);
-  const pagesDir = process.env.PAGES_DIR || path.join(process.cwd(), 'pages');
-  const isProd = process.env.NODE_ENV === 'production';
+function createMiniNextServer(options = {}) {
+  const pagesDir = options.pagesDir || path.join(process.cwd(), 'pages');
+  const publicDir = options.publicDir || path.join(process.cwd(), 'public');
+  const isProd = options.isProd ?? process.env.NODE_ENV === 'production';
 
   enableBabelRegister();
 
   const native = loadNativeAddon();
   const routeMatcher = new native.RouteMatcher(pagesDir);
-  const ssrCache = new native.SSRCache(Number(process.env.SSR_CACHE_SIZE || 512));
+  const ssrCache = new native.SSRCache(Number(options.ssrCacheSize || process.env.SSR_CACHE_SIZE || 512));
 
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
 
-  const publicDir = process.env.PUBLIC_DIR || path.join(process.cwd(), 'public');
   if (fs.existsSync(publicDir)) {
     app.use(express.static(publicDir));
   }
@@ -73,7 +72,7 @@ async function main() {
     res.json({ ok: true });
   });
 
-  app.get('*', async (req, res) => {
+  app.get(/.*/, async (req, res) => {
     try {
       if (!isProd) {
         routeMatcher.rescan();
@@ -117,13 +116,27 @@ async function main() {
     }
   });
 
-  app.listen(port, () => {
-    console.log(`mini-next-cpp dev server listening on http://localhost:${port}`);
-    console.log(`pagesDir: ${pagesDir}`);
+  return { app, pagesDir };
+}
+
+async function startMiniNextDevServer(options = {}) {
+  const port = Number(options.port || process.env.PORT || 3000);
+  const { app, pagesDir } = createMiniNextServer(options);
+
+  return new Promise((resolve) => {
+    const server = app.listen(port, () => {
+      console.log(`mini-next-cpp dev server listening on http://localhost:${port}`);
+      console.log(`pagesDir: ${pagesDir}`);
+      resolve(server);
+    });
   });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { createMiniNextServer, startMiniNextDevServer };
+
+if (require.main === module) {
+  startMiniNextDevServer().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

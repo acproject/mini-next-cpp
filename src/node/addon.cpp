@@ -1,10 +1,20 @@
 #include <napi.h>
 
 #include "../cpp/cache/lru_cache.hpp"
+#include "../cpp/renderer/react_renderer.hpp"
 #include "../cpp/router/route_matcher.hpp"
 
 #include <memory>
 #include <string>
+#include <unordered_map>
+
+namespace mini_next {
+std::string markdownToHtml(const std::string &markdown);
+std::string
+renderTemplate(const std::string &tpl,
+               const std::unordered_map<std::string, std::string> &ctx,
+               bool escape);
+} // namespace mini_next
 
 class RouteMatcherWrapper : public Napi::ObjectWrap<RouteMatcherWrapper> {
 public:
@@ -143,9 +153,64 @@ private:
 
 Napi::FunctionReference SSRCacheWrapper::constructor;
 
+static Napi::Value MarkdownToHtml(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "Expected markdown string")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  const std::string markdown = info[0].As<Napi::String>().Utf8Value();
+  return Napi::String::New(env, mini_next::markdownToHtml(markdown));
+}
+
+static Napi::Value RenderTemplate(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsString() || !info[1].IsObject()) {
+    Napi::TypeError::New(env, "Expected (template: string, data: object)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  const std::string tpl = info[0].As<Napi::String>().Utf8Value();
+  const Napi::Object data = info[1].As<Napi::Object>();
+  const bool escape = info.Length() >= 3 ? info[2].ToBoolean().Value() : true;
+
+  std::unordered_map<std::string, std::string> ctx;
+  Napi::Array keys = data.GetPropertyNames();
+  ctx.reserve(keys.Length());
+  for (uint32_t i = 0; i < keys.Length(); i++) {
+    Napi::Value k = keys.Get(i);
+    std::string key = k.ToString().Utf8Value();
+    Napi::Value v = data.Get(k);
+    ctx.emplace(std::move(key), v.ToString().Utf8Value());
+  }
+
+  std::string rendered = mini_next::renderTemplate(tpl, ctx, escape);
+  return Napi::String::New(env, rendered);
+}
+
+static Napi::Value RenderToString(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "Expected modulePath string")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  const std::string modulePath = info[0].As<Napi::String>().Utf8Value();
+  const std::string propsJson = info.Length() >= 2 && info[1].IsString()
+                                    ? info[1].As<Napi::String>().Utf8Value()
+                                    : std::string("{}");
+  std::string html = mini_next::reactRenderToString(env, modulePath, propsJson);
+  return Napi::String::New(env, html);
+}
+
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
   RouteMatcherWrapper::Init(env, exports);
   SSRCacheWrapper::Init(env, exports);
+  exports.Set("markdownToHtml", Napi::Function::New(env, MarkdownToHtml));
+  exports.Set("renderTemplate", Napi::Function::New(env, RenderTemplate));
+  exports.Set("renderToString", Napi::Function::New(env, RenderToString));
   return exports;
 }
 
