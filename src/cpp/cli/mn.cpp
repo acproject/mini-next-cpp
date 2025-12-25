@@ -81,7 +81,7 @@ static MnInteractiveResult runInteractiveTui() {
   std::vector<std::string> db_list = {"none", "sqlite"};
   int db_index = 0;
 
-  auto screen = ScreenInteractive::FitComponent();
+  auto screen = ScreenInteractive::Fullscreen();
 
   auto dir_input = Input(&dir, "mini-next-app");
   auto ts_checkbox = Checkbox("TypeScript (--ts)", &typescript);
@@ -104,7 +104,7 @@ static MnInteractiveResult runInteractiveTui() {
   };
 
   auto create_btn = Button("Create", on_submit);
-  auto cancel_btn = Button("Cancel", on_cancel);
+  auto cancel_btn = Button("Exit", on_cancel);
 
   auto container = Container::Vertical({
       dir_input,
@@ -118,36 +118,35 @@ static MnInteractiveResult runInteractiveTui() {
   });
 
   auto renderer = Renderer(container, [&] {
+    const int h_template = static_cast<int>(templates.size());
+    const int h_css = static_cast<int>(css_list.size());
+    const int h_ui = static_cast<int>(ui_list.size());
+    const int h_db = static_cast<int>(db_list.size());
+
     auto left = vbox({
-        text("Project directory") | bold,
-        dir_input->Render() | border,
-        separator(),
+        window(text("Project directory") | bold, dir_input->Render()),
         ts_checkbox->Render(),
-        separator(),
-        text("Template") | bold,
-        template_box->Render(),
-        separator(),
-        text("CSS") | bold,
-        css_box->Render(),
+        window(text("Template") | bold,
+               template_box->Render() | size(HEIGHT, EQUAL, h_template) | frame),
+        window(text("CSS") | bold,
+               css_box->Render() | size(HEIGHT, EQUAL, h_css) | frame),
     });
 
     auto right = vbox({
-        text("UI") | bold,
-        ui_box->Render(),
-        separator(),
-        text("Database") | bold,
-        db_box->Render(),
-        separator(),
+        window(text("UI") | bold,
+               ui_box->Render() | size(HEIGHT, EQUAL, h_ui) | frame),
+        window(text("Database") | bold,
+               db_box->Render() | size(HEIGHT, EQUAL, h_db) | frame),
         install_checkbox->Render(),
-        separator(),
-        hbox({
-            create_btn->Render() | border,
-            text(" "),
-            cancel_btn->Render() | border,
-        }),
-        separator(),
-        text("Tip: use Arrow keys + Enter / Space") | dim,
     });
+
+    auto buttons = hbox({
+        create_btn->Render() | border,
+        text(" "),
+        cancel_btn->Render() | border,
+    });
+
+    auto tip = text("Tip: Tab to focus • Arrow keys • Space to toggle • Esc to exit") | dim;
 
     return vbox({
                text("mini-next-cpp CLI") | bold,
@@ -156,12 +155,23 @@ static MnInteractiveResult runInteractiveTui() {
                    left | flex,
                    separator(),
                    right | flex,
-               }) | border,
+               }) | border | flex,
+               separator(),
+               buttons,
+               tip,
            }) |
            flex;
   });
 
-  screen.Loop(renderer);
+  dir_input->TakeFocus();
+  auto app = CatchEvent(renderer, [&](Event e) {
+    if (e == Event::Escape) {
+      on_cancel();
+      return true;
+    }
+    return false;
+  });
+  screen.Loop(app);
 
   if (canceled || !submitted)
     return result;

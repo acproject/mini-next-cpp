@@ -101,6 +101,8 @@ mn create my-app --template music --db sqlite --css tailwind --ui daisyui
 mn
 ```
 
+![mn CLI](doc/image.png)
+
 ## C++ 静态部署服务器（mini-next-serve）
 
 `mini-next-serve` 是一个极简静态文件服务器（用于部署静态产物/导出目录），示例：
