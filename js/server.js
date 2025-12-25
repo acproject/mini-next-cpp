@@ -272,6 +272,12 @@ async function resolvePageProps(mod, ctx) {
       return out.props;
     }
   }
+  if (mod && typeof mod.getStaticProps === 'function') {
+    const out = await mod.getStaticProps(ctx);
+    if (out && typeof out === 'object' && out.props && typeof out.props === 'object') {
+      return out.props;
+    }
+  }
   return { params: ctx.params, query: ctx.query };
 }
 
@@ -286,10 +292,45 @@ function createMiniNextServer(options = {}) {
   const routeMatcher = new native.RouteMatcher(pagesDir);
   const ssrCache = new native.SSRCache(Number(options.ssrCacheSize || process.env.SSR_CACHE_SIZE || 512));
   const isrCache = new Map();
+  const isrIndexByModulePath = new Map();
   const imageCache = new Map();
   const renderer = pickRenderer(native, options);
   const cleanups = [];
   const hmrClients = new Set();
+  const plugins = Array.isArray(options.plugins) ? options.plugins.filter(Boolean) : [];
+
+  function isrIndexAdd(modulePath, key) {
+    const abs = String(modulePath || '');
+    if (!abs) return;
+    let set = isrIndexByModulePath.get(abs);
+    if (!set) {
+      set = new Set();
+      isrIndexByModulePath.set(abs, set);
+    }
+    set.add(key);
+  }
+
+  function isrIndexRemoveKey(key) {
+    for (const set of isrIndexByModulePath.values()) {
+      set.delete(key);
+    }
+  }
+
+  function isrInvalidateModule(modulePath) {
+    const abs = String(modulePath || '');
+    if (!abs) return;
+    const set = isrIndexByModulePath.get(abs);
+    if (!set) return;
+    for (const k of set) {
+      isrCache.delete(k);
+    }
+    isrIndexByModulePath.delete(abs);
+  }
+
+  function isrClear() {
+    isrCache.clear();
+    isrIndexByModulePath.clear();
+  }
 
   let needsRescan = !isProd;
   if (!isProd && typeof native.FileWatcher === 'function') {
@@ -297,11 +338,21 @@ function createMiniNextServer(options = {}) {
     watcher.start(pagesDir, (ev) => {
       needsRescan = true;
       ssrCache.clear();
+      isrClear();
       pagesCompiler.invalidate(ev && ev.path ? String(ev.path) : null);
       const msg = JSON.stringify({ type: 'reload', changed: ev && ev.path ? String(ev.path) : null, ts: Date.now() });
       for (const res of hmrClients) {
         try {
           res.write(`data: ${msg}\n\n`);
+        } catch (_) {
+        }
+      }
+      for (const p of plugins) {
+        try {
+          if (p && typeof p.onDevFileChange === 'function') {
+            const out = p.onDevFileChange(ev);
+            if (out && typeof out.catch === 'function') out.catch(() => { });
+          }
         } catch (_) {
         }
       }
@@ -400,6 +451,9 @@ function createMiniNextServer(options = {}) {
       const first = map.keys().next().value;
       if (first == null) break;
       map.delete(first);
+      if (map === isrCache) {
+        isrIndexRemoveKey(first);
+      }
     }
   }
 
@@ -444,6 +498,35 @@ function createMiniNextServer(options = {}) {
     return styles + s;
   }
 
+  async function applyPropsPlugins(props, ctx) {
+    let nextProps = props && typeof props === 'object' ? props : {};
+    for (const p of plugins) {
+      if (!p || typeof p.extendPageProps !== 'function') continue;
+      const out = await p.extendPageProps(nextProps, ctx);
+      if (out && typeof out === 'object') nextProps = out;
+    }
+    return nextProps;
+  }
+
+  async function applyHtmlPlugins(html, ctx) {
+    let outHtml = String(html || '');
+    for (const p of plugins) {
+      if (!p || typeof p.transformHtml !== 'function') continue;
+      const out = await p.transformHtml(outHtml, ctx);
+      if (typeof out === 'string') outHtml = out;
+    }
+    return outHtml;
+  }
+
+  async function runPlugins(name, ctx) {
+    for (const p of plugins) {
+      if (!p) continue;
+      const fn = p[name];
+      if (typeof fn !== 'function') continue;
+      await fn.call(p, ctx);
+    }
+  }
+
   function renderErrorPage(err, req) {
     const stack = String(err && err.stack ? err.stack : err);
     const safe = stack
@@ -482,6 +565,42 @@ function createMiniNextServer(options = {}) {
     app.use(express.static(publicDir));
   }
 
+  {
+    const api = {
+      app,
+      isProd,
+      pagesDir,
+      publicDir,
+      native,
+      routeMatcher,
+      ssrCache,
+      rendererMode: renderer.mode,
+      clearCaches: () => {
+        ssrCache.clear();
+        isrClear();
+        imageCache.clear();
+      },
+      invalidate: (filePath) => {
+        const abs = typeof filePath === 'string' ? filePath : null;
+        pagesCompiler.invalidate(abs);
+        ssrCache.clear();
+        if (abs) {
+          isrInvalidateModule(abs);
+        } else {
+          isrClear();
+        }
+      },
+    };
+    for (const p of plugins) {
+      if (!p || typeof p.apply !== 'function') continue;
+      p.apply(api);
+    }
+    for (const p of plugins) {
+      if (!p || typeof p.onStart !== 'function') continue;
+      p.onStart(api);
+    }
+  }
+
   app.get('/__mini_next__/health', (req, res) => {
     res.json({ ok: true });
   });
@@ -499,7 +618,7 @@ function createMiniNextServer(options = {}) {
 
   app.post('/__mini_next__/cache/clear', (req, res) => {
     ssrCache.clear();
-    isrCache.clear();
+    isrClear();
     imageCache.clear();
     res.json({ ok: true });
   });
@@ -536,9 +655,18 @@ function createMiniNextServer(options = {}) {
 
   app.get('/_mini_next/image', async (req, res) => {
     const url = String(req.query && req.query.url ? req.query.url : '');
-    const wRaw = req.query && req.query.w != null ? String(req.query.w) : '';
-    const qRaw = req.query && req.query.q != null ? String(req.query.q) : '';
-    const fRaw = req.query && req.query.format != null ? String(req.query.format) : '';
+    const wRaw = req.query && (req.query.w != null || req.query.width != null)
+      ? String(req.query.w != null ? req.query.w : req.query.width)
+      : '';
+    const hRaw = req.query && (req.query.h != null || req.query.height != null)
+      ? String(req.query.h != null ? req.query.h : req.query.height)
+      : '';
+    const qRaw = req.query && (req.query.q != null || req.query.quality != null)
+      ? String(req.query.q != null ? req.query.q : req.query.quality)
+      : '';
+    const fRaw = req.query && (req.query.format != null || req.query.f != null)
+      ? String(req.query.format != null ? req.query.format : req.query.f)
+      : '';
     if (!url || !url.startsWith('/')) {
       res.status(400).json({ ok: false, error: 'Invalid url' });
       return;
@@ -560,7 +688,7 @@ function createMiniNextServer(options = {}) {
     } catch (_) {
     }
     if (stat) {
-      const etagSeed = `${abs}|${Number(stat.size || 0)}|${Number(stat.mtimeMs || 0)}|w=${wRaw}|q=${qRaw}|f=${fRaw}`;
+      const etagSeed = `${abs}|${Number(stat.size || 0)}|${Number(stat.mtimeMs || 0)}|w=${wRaw}|h=${hRaw}|q=${qRaw}|f=${fRaw}`;
       const etag = `W/\"${crypto.createHash('sha1').update(etagSeed).digest('hex').slice(0, 16)}\"`;
       res.setHeader('etag', etag);
       const inm = req.headers['if-none-match'];
@@ -587,15 +715,17 @@ function createMiniNextServer(options = {}) {
       res.setHeader('content-type', ext === '.svg' ? `${type}; charset=utf-8` : type);
     }
     const w = Number.parseInt(wRaw, 10);
+    const h = Number.parseInt(hRaw, 10);
     const q = Number.parseInt(qRaw, 10);
     const width = Number.isFinite(w) && w > 0 ? Math.min(w, 4096) : null;
+    const height = Number.isFinite(h) && h > 0 ? Math.min(h, 4096) : null;
     const quality = Number.isFinite(q) && q > 0 ? Math.min(q, 100) : 75;
     const fmt = String(fRaw || '').trim().toLowerCase();
     const format = fmt === 'webp' || fmt === 'avif' || fmt === 'jpeg' || fmt === 'jpg' || fmt === 'png'
       ? (fmt === 'jpg' ? 'jpeg' : fmt)
       : null;
 
-    const shouldTransform = !!(width || format || qRaw);
+    const shouldTransform = !!(width || height || format || qRaw);
     const raster = ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp' || ext === '.avif';
 
     if (shouldTransform && raster) {
@@ -606,7 +736,7 @@ function createMiniNextServer(options = {}) {
       }
 
       if (sharp) {
-        const key = `${abs}|${Number(stat ? stat.size : 0)}|${Number(stat ? stat.mtimeMs : 0)}|w=${width || ''}|q=${quality}|f=${format || ''}`;
+        const key = `${abs}|${Number(stat ? stat.size : 0)}|${Number(stat ? stat.mtimeMs : 0)}|w=${width || ''}|h=${height || ''}|q=${quality}|f=${format || ''}`;
         const cached = lruGet(imageCache, key);
         if (cached && cached.etag === res.getHeader('etag')) {
           res.setHeader('content-type', cached.contentType);
@@ -616,8 +746,11 @@ function createMiniNextServer(options = {}) {
         }
 
         let img = sharp(abs);
-        if (width) {
-          img = img.resize({ width, withoutEnlargement: true });
+        if (width || height) {
+          const resizeOpts = { withoutEnlargement: true };
+          if (width) resizeOpts.width = width;
+          if (height) resizeOpts.height = height;
+          img = img.resize(resizeOpts);
         }
 
         const outFormat = format || (ext === '.png' ? 'png' : 'jpeg');
@@ -667,6 +800,7 @@ function createMiniNextServer(options = {}) {
       }
 
       const urlPath = req.path || '/';
+      await runPlugins('onRequest', { req, res, urlPath });
       const match = routeMatcher.match(urlPath);
       if (!match || match.matched !== true || !match.filePath) {
         res.status(404).send('Not Found');
@@ -674,6 +808,7 @@ function createMiniNextServer(options = {}) {
       }
 
       const modulePath = match.filePath;
+      await runPlugins('onPageResolved', { req, res, urlPath, modulePath, params: match.params || {} });
       const pageModule = await loadModuleWithEsmFallback(modulePath, { cacheBust: !isProd });
       const Component = normalizePageModule(pageModule);
 
@@ -682,8 +817,11 @@ function createMiniNextServer(options = {}) {
         return;
       }
 
-      const ctx = { req, res, params: match.params || {}, query: req.query || {} };
-      const isStatic = isProd && pageModule && typeof pageModule.getStaticProps === 'function';
+      const ctx = { req, res, params: match.params || {}, query: req.query || {}, urlPath, modulePath };
+      const isStatic = isProd
+        && pageModule
+        && typeof pageModule.getStaticProps === 'function'
+        && typeof pageModule.getServerSideProps !== 'function';
 
       if (isStatic) {
         const key = isrKey(modulePath, urlPath, match.params || {});
@@ -695,7 +833,8 @@ function createMiniNextServer(options = {}) {
         }
 
         const staticOut = await resolveStaticProps(pageModule, ctx);
-        const props = staticOut ? staticOut.props : { params: ctx.params, query: ctx.query };
+        const propsRaw = staticOut ? staticOut.props : { params: ctx.params, query: ctx.query };
+        const props = await applyPropsPlugins(propsRaw, ctx);
         const revalidateMs = staticOut && staticOut.revalidateSec != null ? staticOut.revalidateSec * 1000 : null;
 
         const pageData = JSON.stringify({ props, route: { path: urlPath, params: match.params || {} } })
@@ -719,7 +858,7 @@ function createMiniNextServer(options = {}) {
           return { html: String(html || '') };
         });
 
-        const html = renderer.mode === 'native'
+        const htmlRaw = renderer.mode === 'native'
           ? native.renderTemplate(
             '<!doctype html><html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>{{title}}</title>{{{stylesHtml}}}</head><body><div id="__next">{{{bodyHtml}}}</div><script id="__MINI_NEXT_DATA__" type="application/json">{{{pageData}}}</script>{{{scriptsHtml}}}</body></html>',
             {
@@ -732,16 +871,21 @@ function createMiniNextServer(options = {}) {
             false,
           )
           : injectStylesHtml(renderOut.result.html, renderOut.stylesHtml);
+        const html = await applyHtmlPlugins(htmlRaw, ctx);
+        await runPlugins('onRendered', { req, res, urlPath, modulePath, params: match.params || {}, html });
 
         const limit = Number(options.isrCacheSize || process.env.ISR_CACHE_SIZE || 256);
         lruSet(isrCache, key, { html, generatedAt: Date.now(), revalidateMs }, Number.isFinite(limit) && limit > 0 ? limit : 256);
+        isrIndexAdd(modulePath, key);
 
         res.setHeader('content-type', 'text/html; charset=utf-8');
+        await runPlugins('onResponse', { req, res, urlPath, modulePath, params: match.params || {}, statusCode: res.statusCode });
         res.send(html);
         return;
       }
 
-      const props = await resolvePageProps(pageModule, ctx);
+      const propsRaw = await resolvePageProps(pageModule, ctx);
+      const props = await applyPropsPlugins(propsRaw, ctx);
       const cacheKey = `${modulePath}|${urlPath}|${JSON.stringify(props)}`;
 
       const cached = ssrCache.get(cacheKey);
@@ -772,7 +916,7 @@ function createMiniNextServer(options = {}) {
         return { html: String(html || '') };
       });
 
-      const html = renderer.mode === 'native'
+      const htmlRaw = renderer.mode === 'native'
         ? native.renderTemplate(
           '<!doctype html><html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>{{title}}</title>{{{stylesHtml}}}</head><body><div id="__next">{{{bodyHtml}}}</div><script id="__MINI_NEXT_DATA__" type="application/json">{{{pageData}}}</script>{{{scriptsHtml}}}</body></html>',
           {
@@ -785,8 +929,11 @@ function createMiniNextServer(options = {}) {
           false,
         )
         : injectStylesHtml(renderOut.result.html, renderOut.stylesHtml);
+      const html = await applyHtmlPlugins(htmlRaw, ctx);
+      await runPlugins('onRendered', { req, res, urlPath, modulePath, params: match.params || {}, html });
       ssrCache.set(cacheKey, html);
       res.setHeader('content-type', 'text/html; charset=utf-8');
+      await runPlugins('onResponse', { req, res, urlPath, modulePath, params: match.params || {}, statusCode: res.statusCode });
       res.send(html);
     } catch (err) {
       res.status(500);

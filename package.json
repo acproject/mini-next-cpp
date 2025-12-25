@@ -11,6 +11,9 @@
   "author": "acproject@qq.com",
   "type": "commonjs",
   "main": "js/index.js",
+  "bin": {
+    "create-mini-next-app": "js/create-mini-next-app.js"
+  },
   "scripts": {
     "install": "node-gyp rebuild",
     "prebuild": "npm run build:cpp",
