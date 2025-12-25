@@ -1,6 +1,6 @@
 {
   "name": "mini-next-cpp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "基于C++的小型NextJs的框架",
   "keywords": [
     "C++",
@@ -13,8 +13,8 @@
   "main": "js/index.js",
   "bin": {
     "create-mini-next-app": "js/create-mini-next-app.js",
-    "mn": "build/Release/mn",
-    "mini-next-serve": "build/Release/mini_next_serve"
+    "mn": "js/bin/mn.js",
+    "mini-next-serve": "js/bin/mini-next-serve.js"
   },
   "scripts": {
     "install": "node-gyp rebuild",
