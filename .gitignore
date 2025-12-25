@@ -169,3 +169,6 @@ gpt2/**
 debug_tensors
 node_modules
 .mini-next
+examples/my-app/node_modules
+examples/music-site/node_modules
+examples/*/node_modules

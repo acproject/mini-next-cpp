@@ -1,6 +1,6 @@
 {
   "name": "mini-next-cpp",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "基于C++的小型NextJs的框架",
   "keywords": [
     "C++",
