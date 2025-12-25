@@ -12,7 +12,9 @@
   "type": "commonjs",
   "main": "js/index.js",
   "bin": {
-    "create-mini-next-app": "js/create-mini-next-app.js"
+    "create-mini-next-app": "js/create-mini-next-app.js",
+    "mn": "build/Release/mn",
+    "mini-next-serve": "build/Release/mini_next_serve"
   },
   "scripts": {
     "install": "node-gyp rebuild",

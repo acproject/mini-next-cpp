@@ -33,6 +33,34 @@
         "-Wextra",
         "-Wpedantic"
       ]
+    },
+    {
+      "target_name": "mn",
+      "type": "executable",
+      "sources": [
+        "src/cpp/cli/mn.cpp"
+      ],
+      "cflags_cc": [
+        "-std=c++17",
+        "-O3",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic"
+      ]
+    },
+    {
+      "target_name": "mini_next_serve",
+      "type": "executable",
+      "sources": [
+        "src/cpp/prod_server/mini_next_serve.cpp"
+      ],
+      "cflags_cc": [
+        "-std=c++17",
+        "-O3",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic"
+      ]
     }
   ]
 }

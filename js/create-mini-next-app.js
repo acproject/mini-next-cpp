@@ -1,14 +1,31 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const childProcess = require('child_process');
 
 function parseArgs(argv) {
-  const out = { dir: null, typescript: false, template: 'basic' };
+  const out = {
+    dir: null,
+    typescript: false,
+    template: 'basic',
+    css: 'tailwind',
+    ui: 'daisyui',
+    db: 'none',
+    install: true,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a) continue;
     if (a === '--ts' || a === '--typescript') {
       out.typescript = true;
+      continue;
+    }
+    if (a === '--no-install') {
+      out.install = false;
+      continue;
+    }
+    if (a === '--install') {
+      out.install = true;
       continue;
     }
     if (a === '--template' && i + 1 < argv.length) {
@@ -18,6 +35,21 @@ function parseArgs(argv) {
     }
     if (a === '--music') {
       out.template = 'music';
+      continue;
+    }
+    if (a === '--css' && i + 1 < argv.length) {
+      out.css = String(argv[i + 1] || 'none');
+      i++;
+      continue;
+    }
+    if (a === '--ui' && i + 1 < argv.length) {
+      out.ui = String(argv[i + 1] || 'none');
+      i++;
+      continue;
+    }
+    if (a === '--db' && i + 1 < argv.length) {
+      out.db = String(argv[i + 1] || 'none');
+      i++;
       continue;
     }
     if (a === '-h' || a === '--help') {
@@ -34,12 +66,18 @@ function usage() {
   return [
     'Usage:',
     '  create-mini-next-app <dir> [--ts] [--template <basic|music>]',
+    '    [--css <none|tailwind|pico|bootstrap>]',
+    '    [--ui <none|daisyui|preline>]',
+    '    [--db <none|sqlite>]',
+    '    [--no-install]',
     '',
     'Examples:',
     '  create-mini-next-app my-app',
     '  create-mini-next-app my-app --ts',
     '  create-mini-next-app my-app --template music',
     '  create-mini-next-app my-app --music',
+    '  create-mini-next-app my-app --css tailwind --ui daisyui',
+    '  create-mini-next-app my-app --template music --db sqlite --css tailwind --ui daisyui',
     '',
   ].join('\n');
 }
@@ -67,7 +105,72 @@ function normalizeAppName(abs) {
     .replace(/-+$/, '') || 'mini-next-app');
 }
 
-function buildBasicTemplate({ appName, typescript }) {
+function normalizeChoice(value, allow, fallback) {
+  const v = String(value || '').trim().toLowerCase();
+  return allow.includes(v) ? v : fallback;
+}
+
+function buildAppPlugin({ css, ui, enableAuth }) {
+  const lines = [];
+  lines.push('function injectBeforeHeadClose(html, extra) {');
+  lines.push('  const s = String(html || "");');
+  lines.push('  const x = String(extra || "");');
+  lines.push('  if (!x) return s;');
+  lines.push('  const idx = s.lastIndexOf("</head>");');
+  lines.push('  if (idx >= 0) return s.slice(0, idx) + x + s.slice(idx);');
+  lines.push('  return x + s;');
+  lines.push('}');
+  lines.push('');
+  lines.push('module.exports = {');
+  lines.push('  transformHtml(html) {');
+  const headParts = [];
+  if (css === 'tailwind') {
+    headParts.push('<link rel="stylesheet" href="/tailwind.css" />');
+  } else if (css === 'pico') {
+    headParts.push('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />');
+  } else if (css === 'bootstrap') {
+    headParts.push('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />');
+  }
+  if (headParts.length === 0) {
+    lines.push('    return html;');
+  } else {
+    lines.push(`    return injectBeforeHeadClose(html, ${JSON.stringify(headParts.join(''))});`);
+  }
+  lines.push('  },');
+  if (ui === 'preline') {
+    lines.push('  getClientScripts() {');
+    lines.push("    return ['https://cdn.jsdelivr.net/npm/preline@2.5.1/dist/preline.js'];");
+    lines.push('  },');
+  }
+  lines.push('  extendPageProps(props) {');
+  lines.push('    const base = props && typeof props === "object" ? props : {};');
+  lines.push(`    return { ...base, enableAuth: ${enableAuth ? 'true' : 'false'} };`);
+  lines.push('  },');
+  lines.push('};');
+  lines.push('');
+  return lines.join('\n');
+}
+
+function buildTailwindConfig({ ui }) {
+  const plugins = [];
+  if (ui === 'daisyui') plugins.push('require("daisyui")');
+  return [
+    '/** @type {import("tailwindcss").Config} */',
+    'module.exports = {',
+    '  content: [',
+    '    "./pages/**/*.{js,jsx,ts,tsx}",',
+    '    "./plugins/**/*.{js,cjs}",',
+    '  ],',
+    '  theme: { extend: {} },',
+    `  plugins: [${plugins.join(', ')}],`,
+    '};',
+    '',
+  ].join('\n');
+}
+
+function buildBasicTemplate({ appName, typescript, css, ui }) {
+  const cssChoice = normalizeChoice(css, ['none', 'tailwind', 'pico', 'bootstrap'], 'none');
+  const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline'], 'none');
   const pkg = {
     name: appName,
     version: '0.1.0',
@@ -80,12 +183,25 @@ function buildBasicTemplate({ appName, typescript }) {
       'mini-next-cpp': '^1.0.0',
     },
   };
+  if (cssChoice === 'tailwind') {
+    pkg.scripts['build:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --minify';
+    pkg.scripts['dev:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --watch';
+    pkg.devDependencies = { tailwindcss: '^4.1.10' };
+    if (uiChoice === 'daisyui') {
+      pkg.devDependencies.daisyui = '^5.0.0';
+    }
+  }
 
   const serverJs = [
+    "const path = require('path');",
     "const { startMiniNextDevServer } = require('mini-next-cpp');",
+    "const appPlugin = require('./plugins/app');",
     '',
     'startMiniNextDevServer({',
     "  port: Number(process.env.PORT || 3000),",
+    "  pagesDir: path.join(__dirname, 'pages'),",
+    "  publicDir: path.join(__dirname, 'public'),",
+    '  plugins: [appPlugin],',
     '}).catch((err) => {',
     '  console.error(err);',
     '  process.exit(1);',
@@ -124,13 +240,19 @@ function buildBasicTemplate({ appName, typescript }) {
   const files = {
     'package.json': `${JSON.stringify(pkg, null, 2)}\n`,
     'server.js': serverJs,
+    [path.join('plugins', 'app.js')]: buildAppPlugin({ css: cssChoice, ui: uiChoice, enableAuth: false }),
     ...(typescript ? { [path.join('pages', 'index.ts')]: pageTs } : { [path.join('pages', 'index.js')]: pageJs }),
   };
-  const dirs = ['public'];
+  const dirs = ['public', 'plugins'];
+  if (cssChoice === 'tailwind') {
+    files['tailwind.config.cjs'] = buildTailwindConfig({ ui: uiChoice });
+    files[path.join('styles', 'tailwind.css')] = ['@import "tailwindcss";', ''].join('\n');
+    dirs.push('styles');
+  }
   return { files, dirs };
 }
 
-function buildMusicTemplate({ appName }) {
+function buildMusicTemplate({ appName, css, ui, db }) {
   const coverSvg = (title, a, b) => `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
   <defs>
@@ -147,6 +269,11 @@ function buildMusicTemplate({ appName }) {
 </svg>
 `;
 
+  const cssChoice = normalizeChoice(css, ['none', 'tailwind', 'pico', 'bootstrap'], 'none');
+  const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline'], 'none');
+  const dbChoice = normalizeChoice(db, ['none', 'sqlite'], 'none');
+  const enableAuth = dbChoice === 'sqlite';
+
   const pkg = {
     name: appName,
     version: '0.1.0',
@@ -157,23 +284,37 @@ function buildMusicTemplate({ appName }) {
     },
     dependencies: {
       'mini-next-cpp': '^1.0.0',
-      'better-sqlite3': '^11.10.0'
     },
   };
+  if (enableAuth) {
+    pkg.dependencies['better-sqlite3'] = '^11.10.0';
+  }
+  if (cssChoice === 'tailwind') {
+    pkg.scripts['build:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --minify';
+    pkg.scripts['dev:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --watch';
+    pkg.devDependencies = { tailwindcss: '^4.1.10' };
+    if (uiChoice === 'daisyui') {
+      pkg.devDependencies.daisyui = '^5.0.0';
+    }
+  }
 
   const serverJs = [
     "const path = require('path');",
     "const { startMiniNextDevServer } = require('mini-next-cpp');",
-    "const { createAuthPlugin } = require('./plugins/auth');",
+    "const appPlugin = require('./plugins/app');",
+    ...(enableAuth ? ["const { createAuthPlugin } = require('./plugins/auth');"] : []),
     '',
     'startMiniNextDevServer({',
     "  port: Number(process.env.PORT || 3000),",
     "  pagesDir: path.join(__dirname, 'pages'),",
     "  publicDir: path.join(__dirname, 'public'),",
     '  plugins: [',
-    '    createAuthPlugin({',
-    "      dbPath: path.join(__dirname, 'data', 'app.db'),",
-    '    }),',
+    '    appPlugin,',
+    ...(enableAuth ? [
+      '    createAuthPlugin({',
+      "      dbPath: path.join(__dirname, 'data', 'app.db'),",
+      '    }),',
+    ] : []),
     '  ],',
     '}).catch((err) => {',
     '  console.error(err);',
@@ -464,6 +605,7 @@ function buildMusicTemplate({ appName }) {
     'function Page(props) {',
     '  const data = props && props.data ? props.data : null;',
     '  const auth = props && props.auth ? props.auth : null;',
+    '  const enableAuth = props && props.enableAuth === true;',
     '  const layout = css`min-height:100vh;background:#0b0b0d;color:#fff;`;',
     '  const topBar = css`position:sticky;top:0;z-index:10;background:rgba(11,11,13,.72);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,.06);`;',
     '  const topInner = css`max-width:1120px;margin:0 auto;padding:14px 18px;display:flex;align-items:center;gap:14px;`;',
@@ -545,7 +687,7 @@ function buildMusicTemplate({ appName }) {
     "          React.createElement('span', { className: lang }, '中文（简体）'),",
     "          React.createElement(Icon, { name: 'search' }),",
     "          React.createElement(Icon, { name: 'globe' }),",
-    '          auth ? React.createElement(',
+    '          (enableAuth && auth) ? React.createElement(',
     "            React.Fragment,",
     '            null,',
     "            React.createElement('a', { className: navA, href: '/profile' }, '你好，' + String(auth.name || auth.email || '')),",
@@ -555,8 +697,8 @@ function buildMusicTemplate({ appName }) {
     '          ) : React.createElement(',
     "            React.Fragment,",
     '            null,',
-    "            React.createElement(Button, { href: '/login', primary: false }, '登录'),",
-    "            React.createElement(Button, { href: '/register', primary: true }, '注册')",
+    '            enableAuth ? React.createElement(Button, { href: "/login", primary: false }, "登录") : null,',
+    '            enableAuth ? React.createElement(Button, { href: "/register", primary: true }, "注册") : null',
     '          )',
     '        ),',
     '      ),',
@@ -856,15 +998,24 @@ function buildMusicTemplate({ appName }) {
   const files = {
     'package.json': `${JSON.stringify(pkg, null, 2)}\n`,
     'server.js': serverJs,
-    [path.join('plugins', 'auth.js')]: authPluginJs,
+    [path.join('plugins', 'app.js')]: buildAppPlugin({ css: cssChoice, ui: uiChoice, enableAuth }),
+    ...(enableAuth ? { [path.join('plugins', 'auth.js')]: authPluginJs } : {}),
     [path.join('pages', 'index.js')]: indexJs,
-    [path.join('pages', 'login.js')]: loginJs,
-    [path.join('pages', 'register.js')]: registerJs,
-    [path.join('pages', 'profile.js')]: profileJs,
+    ...(enableAuth ? {
+      [path.join('pages', 'login.js')]: loginJs,
+      [path.join('pages', 'register.js')]: registerJs,
+      [path.join('pages', 'profile.js')]: profileJs,
+    } : {}),
     [path.join('data', 'songs.json')]: songsJson,
   };
 
   const dirs = [path.join('public', 'covers')];
+  dirs.push('plugins');
+  if (cssChoice === 'tailwind') {
+    files['tailwind.config.cjs'] = buildTailwindConfig({ ui: uiChoice });
+    files[path.join('styles', 'tailwind.css')] = ['@import "tailwindcss";', ''].join('\n');
+    dirs.push('styles');
+  }
   const assets = {
     [path.join('public', 'covers', 'missing.svg')]: coverSvg('网恋', '#7c3aed', '#111827'),
     [path.join('public', 'covers', 'blue.svg')]: coverSvg('Songwriter', '#2563eb', '#0f172a'),
@@ -881,9 +1032,23 @@ function buildMusicTemplate({ appName }) {
   return { files, dirs, assets };
 }
 
+function runCommand(cwd, cmd, args) {
+  const isWin = process.platform === 'win32';
+  const c = isWin && cmd === 'npm' ? 'npm.cmd' : cmd;
+  const r = childProcess.spawnSync(c, args, { cwd, stdio: 'inherit' });
+  if (r.status !== 0) {
+    const code = typeof r.status === 'number' ? r.status : 1;
+    throw new Error(`${cmd} ${args.join(' ')} failed with exit code ${code}`);
+  }
+}
+
 async function createApp(targetDir, options = {}) {
   const typescript = options.typescript === true;
   const template = String(options.template || 'basic');
+  const css = options.css || 'none';
+  const ui = options.ui || 'none';
+  const db = options.db || 'none';
+  const install = options.install === true;
   const abs = path.resolve(process.cwd(), targetDir);
   if (fs.existsSync(abs) && !fs.statSync(abs).isDirectory()) {
     throw new Error(`Target path exists and is not a directory: ${abs}`);
@@ -897,8 +1062,8 @@ async function createApp(targetDir, options = {}) {
 
   const appName = normalizeAppName(abs);
   const tpl = template === 'music'
-    ? buildMusicTemplate({ appName })
-    : buildBasicTemplate({ appName, typescript });
+    ? buildMusicTemplate({ appName, css, ui, db })
+    : buildBasicTemplate({ appName, typescript, css, ui });
 
   for (const d of tpl.dirs || []) {
     fs.mkdirSync(path.join(abs, d), { recursive: true });
@@ -915,6 +1080,14 @@ async function createApp(targetDir, options = {}) {
     }
   }
 
+  if (install) {
+    runCommand(abs, 'npm', ['install']);
+    const needsCssBuild = tpl.files && Object.prototype.hasOwnProperty.call(tpl.files, 'tailwind.config.cjs');
+    if (needsCssBuild) {
+      runCommand(abs, 'npm', ['run', 'build:css']);
+    }
+  }
+
   return { dir: abs };
 }
 
@@ -925,11 +1098,22 @@ async function main() {
     process.exit(args.help ? 0 : 1);
   }
   try {
-    const out = await createApp(args.dir, { typescript: args.typescript, template: args.template });
+    const out = await createApp(args.dir, {
+      typescript: args.typescript,
+      template: args.template,
+      css: args.css,
+      ui: args.ui,
+      db: args.db,
+      install: args.install,
+    });
     process.stdout.write(`Created mini-next-cpp app in ${out.dir}\n`);
     process.stdout.write('Next:\n');
     process.stdout.write(`  cd ${args.dir}\n`);
-    process.stdout.write('  npm install\n');
+    if (!args.install) {
+      process.stdout.write('  npm install\n');
+      const needsCssBuild = String(args.css || '').toLowerCase() === 'tailwind';
+      if (needsCssBuild) process.stdout.write('  npm run build:css\n');
+    }
     process.stdout.write('  npm run dev\n');
   } catch (err) {
     process.stderr.write(`${String(err && err.message ? err.message : err)}\n`);
