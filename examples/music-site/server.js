@@ -1,5 +1,6 @@
 const path = require('path');
 const { startMiniNextDevServer } = require('mini-next-cpp');
+const appPlugin = require('./plugins/app');
 const { createAuthPlugin } = require('./plugins/auth');
 
 startMiniNextDevServer({
@@ -7,6 +8,7 @@ startMiniNextDevServer({
   pagesDir: path.join(__dirname, 'pages'),
   publicDir: path.join(__dirname, 'public'),
   plugins: [
+    appPlugin,
     createAuthPlugin({
       dbPath: path.join(__dirname, 'data', 'app.db'),
     }),

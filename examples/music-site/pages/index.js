@@ -27,6 +27,7 @@ function Chip({ children }) {
 function Page(props) {
   const data = props && props.data ? props.data : null;
   const auth = props && props.auth ? props.auth : null;
+  const enableAuth = props && props.enableAuth === true;
   const layout = css`min-height:100vh;background:#0b0b0d;color:#fff;`;
   const topBar = css`position:sticky;top:0;z-index:10;background:rgba(11,11,13,.72);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,.06);`;
   const topInner = css`max-width:1120px;margin:0 auto;padding:14px 18px;display:flex;align-items:center;gap:14px;`;
@@ -108,7 +109,7 @@ function Page(props) {
           React.createElement('span', { className: lang }, '中文（简体）'),
           React.createElement(Icon, { name: 'search' }),
           React.createElement(Icon, { name: 'globe' }),
-          auth ? React.createElement(
+          (enableAuth && auth) ? React.createElement(
             React.Fragment,
             null,
             React.createElement('a', { className: navA, href: '/profile' }, '你好，' + String(auth.name || auth.email || '')),
@@ -118,8 +119,8 @@ function Page(props) {
           ) : React.createElement(
             React.Fragment,
             null,
-            React.createElement(Button, { href: '/login', primary: false }, '登录'),
-            React.createElement(Button, { href: '/register', primary: true }, '注册')
+            enableAuth ? React.createElement(Button, { href: "/login", primary: false }, "登录") : null,
+            enableAuth ? React.createElement(Button, { href: "/register", primary: true }, "注册") : null
           )
         ),
       ),

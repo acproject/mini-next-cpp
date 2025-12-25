@@ -4,10 +4,16 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build:css": "tailwindcss -c ./tailwind.config.cjs -i ./styles/tailwind.css -o ./public/tailwind.css --minify",
+    "dev:css": "tailwindcss -c ./tailwind.config.cjs -i ./styles/tailwind.css -o ./public/tailwind.css --watch"
   },
   "dependencies": {
     "mini-next-cpp": "file:../..",
     "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17",
+    "daisyui": "^4.12.14"
   }
 }

@@ -177,7 +177,7 @@ function buildTailwindConfig({ ui }) {
   ].join('\n');
 }
 
-function buildBasicTemplate({ appName, typescript, css, ui }) {
+function buildBasicTemplate({ appName, typescript, css, ui, miniNextDependency }) {
   const cssChoice = normalizeChoice(css, ['none', 'tailwind', 'pico', 'bootstrap'], 'none');
   const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline', 'flowbite'], 'none');
   const pkg = {
@@ -189,7 +189,7 @@ function buildBasicTemplate({ appName, typescript, css, ui }) {
       dev: 'node server.js',
     },
     dependencies: {
-      'mini-next-cpp': '^1.0.0',
+      'mini-next-cpp': String(miniNextDependency || '^1.0.0'),
     },
   };
   if (cssChoice === 'tailwind') {
@@ -258,13 +258,18 @@ function buildBasicTemplate({ appName, typescript, css, ui }) {
   const dirs = ['public', 'plugins'];
   if (cssChoice === 'tailwind') {
     files['tailwind.config.cjs'] = buildTailwindConfig({ ui: uiChoice });
-    files[path.join('styles', 'tailwind.css')] = ['@import "tailwindcss";', ''].join('\n');
+    files[path.join('styles', 'tailwind.css')] = [
+      '@tailwind base;',
+      '@tailwind components;',
+      '@tailwind utilities;',
+      '',
+    ].join('\n');
     dirs.push('styles');
   }
   return { files, dirs };
 }
 
-function buildMusicTemplate({ appName, css, ui, db }) {
+function buildMusicTemplate({ appName, css, ui, db, miniNextDependency }) {
   const coverSvg = (title, a, b) => `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
   <defs>
@@ -295,7 +300,7 @@ function buildMusicTemplate({ appName, css, ui, db }) {
       dev: 'node server.js',
     },
     dependencies: {
-      'mini-next-cpp': '^1.0.0',
+      'mini-next-cpp': String(miniNextDependency || '^1.0.0'),
     },
   };
   if (enableAuth) {
@@ -1028,7 +1033,12 @@ function buildMusicTemplate({ appName, css, ui, db }) {
   dirs.push('plugins');
   if (cssChoice === 'tailwind') {
     files['tailwind.config.cjs'] = buildTailwindConfig({ ui: uiChoice });
-    files[path.join('styles', 'tailwind.css')] = ['@import "tailwindcss";', ''].join('\n');
+    files[path.join('styles', 'tailwind.css')] = [
+      '@tailwind base;',
+      '@tailwind components;',
+      '@tailwind utilities;',
+      '',
+    ].join('\n');
     dirs.push('styles');
   }
   const assets = {
@@ -1057,6 +1067,28 @@ function runCommand(cwd, cmd, args) {
   }
 }
 
+function resolveMiniNextDependency(targetAbs) {
+  try {
+    const repoRoot = path.resolve(__dirname, '..');
+    const pkgPath = path.join(repoRoot, 'package.json');
+    if (!fs.existsSync(pkgPath)) return '^1.0.0';
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (!pkg || pkg.name !== 'mini-next-cpp') return '^1.0.0';
+    const v = String(pkg.version || '1.0.0');
+
+    const abs = path.resolve(String(targetAbs || ''));
+    const examplesDir = path.join(repoRoot, 'examples') + path.sep;
+    if (abs.startsWith(examplesDir)) {
+      const rel = path.relative(abs, repoRoot) || '.';
+      const p = rel.startsWith('.') ? rel : `./${rel}`;
+      return `file:${p.split(path.sep).join('/')}`;
+    }
+    return `^${v}`;
+  } catch (_) {
+    return '^1.0.0';
+  }
+}
+
 async function createApp(targetDir, options = {}) {
   const typescript = options.typescript === true;
   const template = String(options.template || 'basic');
@@ -1076,9 +1108,10 @@ async function createApp(targetDir, options = {}) {
   }
 
   const appName = normalizeAppName(abs);
+  const miniNextDependency = resolveMiniNextDependency(abs);
   const tpl = template === 'music'
-    ? buildMusicTemplate({ appName, css, ui, db })
-    : buildBasicTemplate({ appName, typescript, css, ui });
+    ? buildMusicTemplate({ appName, css, ui, db, miniNextDependency })
+    : buildBasicTemplate({ appName, typescript, css, ui, miniNextDependency });
 
   for (const d of tpl.dirs || []) {
     fs.mkdirSync(path.join(abs, d), { recursive: true });
