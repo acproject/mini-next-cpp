@@ -8,6 +8,7 @@
         "src/cpp/renderer/react_renderer.cpp",
         "src/cpp/renderer/template_engine.cpp",
         "src/cpp/parser/markdown_parser.cpp",
+        "src/cpp/parser/jsx_parser.cpp",
         "src/cpp/utils/string_utils.cpp",
         "src/cpp/utils/perf_counter.cpp",
         "src/cpp/cache/lru_cache.cpp",

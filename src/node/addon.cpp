@@ -17,6 +17,7 @@ std::string
 renderTemplate(const std::string &tpl,
                const std::unordered_map<std::string, std::string> &ctx,
                bool escape);
+std::string jsxToJsModule(const std::string &input);
 } // namespace mini_next
 
 class RouteMatcherWrapper : public Napi::ObjectWrap<RouteMatcherWrapper> {
@@ -366,6 +367,17 @@ static Napi::Value RenderToString(const Napi::CallbackInfo &info) {
   return Napi::String::New(env, html);
 }
 
+static Napi::Value JsxToJsModule(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "Expected source string")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  const std::string src = info[0].As<Napi::String>().Utf8Value();
+  return Napi::String::New(env, mini_next::jsxToJsModule(src));
+}
+
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
   RouteMatcherWrapper::Init(env, exports);
   FileWatcherWrapper::Init(env, exports);
@@ -373,6 +385,7 @@ Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
   exports.Set("markdownToHtml", Napi::Function::New(env, MarkdownToHtml));
   exports.Set("renderTemplate", Napi::Function::New(env, RenderTemplate));
   exports.Set("renderToString", Napi::Function::New(env, RenderToString));
+  exports.Set("jsxToJsModule", Napi::Function::New(env, JsxToJsModule));
   return exports;
 }
 

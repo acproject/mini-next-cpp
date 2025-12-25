@@ -26,7 +26,11 @@ async function main() {
 
   withTempDir((pagesDir) => {
     writeFile(path.join(pagesDir, 'index.js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, '[[...root]].js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, '[...slug].js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, 'a.js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'blog', 'index.js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, 'blog', '[[...slug]].js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'user', '[id].js'), 'module.exports = () => null;');
 
     const rm = new native.RouteMatcher(pagesDir);
@@ -35,14 +39,43 @@ async function main() {
     assert.strictEqual(m1.matched, true);
     assert.strictEqual(m1.filePath, path.join(pagesDir, 'index.js'));
 
+    const m1b = rm.match('/x/y');
+    assert.strictEqual(m1b.matched, true);
+    assert.strictEqual(m1b.filePath, path.join(pagesDir, '[...slug].js'));
+    assert.deepStrictEqual(m1b.params, { slug: 'x/y' });
+
+    const m1c = rm.match('/a');
+    assert.strictEqual(m1c.matched, true);
+    assert.strictEqual(m1c.filePath, path.join(pagesDir, 'a.js'));
+
     const m2 = rm.match('/blog');
     assert.strictEqual(m2.matched, true);
     assert.strictEqual(m2.filePath, path.join(pagesDir, 'blog', 'index.js'));
+
+    const m2b = rm.match('/blog/a/b');
+    assert.strictEqual(m2b.matched, true);
+    assert.strictEqual(m2b.filePath, path.join(pagesDir, 'blog', '[[...slug]].js'));
+    assert.deepStrictEqual(m2b.params, { slug: 'a/b' });
 
     const m3 = rm.match('/user/123');
     assert.strictEqual(m3.matched, true);
     assert.strictEqual(m3.filePath, path.join(pagesDir, 'user', '[id].js'));
     assert.deepStrictEqual(m3.params, { id: '123' });
+  });
+
+  withTempDir((pagesDir) => {
+    writeFile(path.join(pagesDir, '[[...slug]].js'), 'module.exports = () => null;');
+    const rm = new native.RouteMatcher(pagesDir);
+
+    const r1 = rm.match('/');
+    assert.strictEqual(r1.matched, true);
+    assert.strictEqual(r1.filePath, path.join(pagesDir, '[[...slug]].js'));
+    assert.deepStrictEqual(r1.params, {});
+
+    const r2 = rm.match('/a/b');
+    assert.strictEqual(r2.matched, true);
+    assert.strictEqual(r2.filePath, path.join(pagesDir, '[[...slug]].js'));
+    assert.deepStrictEqual(r2.params, { slug: 'a/b' });
   });
 
   {
@@ -70,6 +103,24 @@ async function main() {
     assert.strictEqual(out1, 'Hello &lt;x&gt;');
     const out2 = native.renderTemplate('Hello {{{name}}}', { name: '<x>' });
     assert.strictEqual(out2, 'Hello <x>');
+  }
+
+  {
+    assert.strictEqual(typeof native.jsxToJsModule, 'function');
+    const src = [
+      'function Page() {',
+      '  return <div id="x">hi {1 + 2}</div>;',
+      '}',
+      'module.exports = Page;',
+      '',
+    ].join('\n');
+    const out = native.jsxToJsModule(src);
+    assert.ok(out.includes("__mini_next_req"));
+    assert.ok(out.includes("__mini_next_req('react')"));
+    assert.ok(out.includes("React.createElement('div'"));
+    assert.ok(out.includes("'id'"));
+    assert.ok(out.includes("'x'"));
+    assert.ok(out.includes('1 + 2'));
   }
 
   {
@@ -194,6 +245,82 @@ async function main() {
       });
     } catch (e) {
       try {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      } finally {
+        reject(e);
+      }
+    }
+  });
+
+  await new Promise((resolve, reject) => {
+    const prev = process.env.JSX_COMPILER;
+    process.env.JSX_COMPILER = 'native';
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-next-cpp-native-jsx-'));
+    const pagesDir = path.join(rootDir, 'pages');
+    const publicDir = path.join(rootDir, 'public');
+    try {
+      writeFile(
+        path.join(pagesDir, 'index.jsx'),
+        [
+          'function Page() {',
+          '  return <div id="x">hi {1 + 2}</div>;',
+          '}',
+          'module.exports = Page;',
+          '',
+        ].join('\n'),
+      );
+
+      const http = require('http');
+      const { createMiniNextServer } = require('../js/server');
+      const { app, close } = createMiniNextServer({ pagesDir, publicDir, isProd: true, ssrCacheSize: 8, isrCacheSize: 8 });
+      const server = app.listen(0, async () => {
+        const port = server.address().port;
+        const get = (p) => new Promise((res, rej) => {
+          const req = http.request({ hostname: '127.0.0.1', port, path: p, method: 'GET' }, (r) => {
+            let data = '';
+            r.setEncoding('utf8');
+            r.on('data', (c) => (data += c));
+            r.on('end', () => res({ status: r.statusCode, body: data }));
+          });
+          req.on('error', rej);
+          req.end();
+        });
+
+        try {
+          const r1 = await get('/');
+          assert.strictEqual(r1.status, 200);
+          assert.ok(r1.body.includes('id="x"'));
+          assert.ok(r1.body.includes('hi'));
+          assert.ok(r1.body.includes('3'));
+        } catch (e) {
+          server.close(() => {
+            try {
+              close();
+            } finally {
+              if (prev == null) delete process.env.JSX_COMPILER;
+              else process.env.JSX_COMPILER = prev;
+              fs.rmSync(rootDir, { recursive: true, force: true });
+              reject(e);
+            }
+          });
+          return;
+        }
+
+        server.close(() => {
+          try {
+            close();
+          } finally {
+            if (prev == null) delete process.env.JSX_COMPILER;
+            else process.env.JSX_COMPILER = prev;
+            fs.rmSync(rootDir, { recursive: true, force: true });
+            resolve();
+          }
+        });
+      });
+    } catch (e) {
+      try {
+        if (prev == null) delete process.env.JSX_COMPILER;
+        else process.env.JSX_COMPILER = prev;
         fs.rmSync(rootDir, { recursive: true, force: true });
       } finally {
         reject(e);

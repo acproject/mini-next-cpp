@@ -2,6 +2,8 @@
 
 基于 C++ 的小型 Next.js 风格框架（支持 SSR / SSG / ISR、插件系统、Edge 运行时适配、CSS-in-JS、图片代理/可选优化）。
 
+更多说明见 `doc/usage.md`。
+
 ## 安装
 
 本包包含 Node-API 原生扩展，安装时会触发 `node-gyp rebuild`。
@@ -9,7 +11,6 @@
 前置依赖：
 
 - Node.js >= 14
-- Python 3
 - C/C++ 编译工具链（macOS: Xcode Command Line Tools / Linux: build-essential / Windows: VS Build Tools）
 
 ```bash
@@ -129,6 +130,19 @@ mini-next-serve --dir ./dist --port 3000
 ```bash
 SSR_MODE=native node server.js
 ```
+
+## 原生 JSX 编译（实验）
+
+默认 pages 编译使用 Babel（支持 `.js/.jsx/.ts/.tsx`）。另外提供一个“原生 JSX -> JS”转换器（C++ 实现），通过环境变量启用：
+
+```bash
+JSX_COMPILER=native node server.js
+```
+
+说明：
+
+- 仅对 `.jsx` 启用原生 JSX 编译（`.tsx` 仍走 Babel），因为 TSX 存在类型语法/泛型等会与 JSX 产生歧义，当前解析器不保证兼容。
+- 原生转换会把 JSX 变成 `React.createElement(...)`，并在需要时注入 React 绑定。
 
 ## 页面数据获取
 

@@ -45,6 +45,18 @@ function createPagesCompiler(pagesDir) {
   const originalTsExtension = Module._extensions['.ts'];
   const originalTsxExtension = Module._extensions['.tsx'];
   const cacheDir = path.join(process.cwd(), '.mini-next', 'pages-cache');
+  const useNativeJsxCompiler = String(process.env.JSX_COMPILER || '') === 'native';
+  let nativeJsx = null;
+  if (useNativeJsxCompiler) {
+    try {
+      const n = loadNativeAddon();
+      if (n && typeof n.jsxToJsModule === 'function') {
+        nativeJsx = n;
+      }
+    } catch (_) {
+      nativeJsx = null;
+    }
+  }
 
   function isUnderPagesDir(filename) {
     const abs = path.resolve(filename);
@@ -110,6 +122,7 @@ function createPagesCompiler(pagesDir) {
     const isTs = ext === '.ts' || ext === '.tsx';
     const isTsx = ext === '.tsx';
     const isJsx = ext === '.jsx' || ext === '.tsx';
+    const isJsxFile = ext === '.jsx';
 
     const outPath = outputPathFor(filename, sourceHash);
     if (fs.existsSync(outPath)) {
@@ -118,17 +131,24 @@ function createPagesCompiler(pagesDir) {
       return code;
     }
 
+    let input = source;
+    let usedNativeJsx = false;
+    if (nativeJsx && isJsxFile) {
+      input = nativeJsx.jsxToJsModule(source);
+      usedNativeJsx = true;
+    }
+
     const presets = [
       [require.resolve('@babel/preset-env'), { targets: { node: 'current' }, modules: 'commonjs' }],
     ];
     if (isTs) {
-      presets.push([require.resolve('@babel/preset-typescript'), { isTSX: isTsx, allExtensions: true }]);
+      presets.push([require.resolve('@babel/preset-typescript'), { isTSX: isTsx && !usedNativeJsx, allExtensions: true }]);
     }
-    if (isJsx || ext === '.js') {
+    if (!usedNativeJsx && (isJsx || ext === '.js')) {
       presets.push([require.resolve('@babel/preset-react'), { runtime: 'automatic' }]);
     }
 
-    const out = babel.transformSync(source, {
+    const out = babel.transformSync(input, {
       filename,
       babelrc: false,
       configFile: false,
