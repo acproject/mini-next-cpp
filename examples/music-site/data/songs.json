@@ -1,0 +1,77 @@
+{
+  "site": {
+    "name": "StreetVoice",
+    "slogan": "把音乐带回生活"
+  },
+  "hero": [
+    {
+      "title": "网恋",
+      "artist": "莫宰羊",
+      "cover": "/covers/missing.svg",
+      "tag": "推荐单曲"
+    },
+    {
+      "title": "Songwriter",
+      "artist": "Demo",
+      "cover": "/covers/blue.svg",
+      "tag": "推荐专辑"
+    },
+    {
+      "title": "Live Session",
+      "artist": "Various",
+      "cover": "/covers/purple.svg",
+      "tag": "热门精选"
+    }
+  ],
+  "songOfDay": {
+    "title": "晃 (demo)",
+    "artist": "吴昊",
+    "cover": "/covers/chair.svg",
+    "likes": 11,
+    "desc": "每日一曲，把日常的缝隙填满；把情绪留给音乐。"
+  },
+  "ranking": [
+    {
+      "idx": 1,
+      "title": "雨爱（帕奇拉PACHILA Remix）",
+      "artist": "街声PACHILA",
+      "cover": "/covers/rain.svg",
+      "likes": 159
+    },
+    {
+      "idx": 2,
+      "title": "冬 / demo",
+      "artist": "没有才能",
+      "cover": "/covers/winter.svg",
+      "likes": 57
+    },
+    {
+      "idx": 3,
+      "title": "阿兹盗贼症",
+      "artist": "暖男曲",
+      "cover": "/covers/rob.svg",
+      "likes": 143
+    },
+    {
+      "idx": 4,
+      "title": "Missin'",
+      "artist": "大成 DACHENG",
+      "cover": "/covers/missin.svg",
+      "likes": 36
+    },
+    {
+      "idx": 5,
+      "title": "空と絆",
+      "artist": "時雨雨",
+      "cover": "/covers/sky.svg",
+      "likes": 41
+    },
+    {
+      "idx": 6,
+      "title": "暖冬2025",
+      "artist": "chun",
+      "cover": "/covers/warm.svg",
+      "likes": 12
+    }
+  ]
+}

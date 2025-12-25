@@ -374,15 +374,22 @@ function createMiniNextServer(options = {}) {
 
   async function getScriptsHtml(pageModule, Component, ctx) {
     const src = getPageScriptsSource(pageModule, Component);
-    if (!src) return '';
     let scripts = [];
-    if (typeof src.getClientScripts === 'function') {
-      const out = await src.getClientScripts(ctx);
-      if (Array.isArray(out)) scripts = out;
-    } else if (Array.isArray(src.__mini_next_scripts)) {
-      scripts = src.__mini_next_scripts;
-    } else if (Array.isArray(src.scripts)) {
-      scripts = src.scripts;
+    if (src) {
+      if (typeof src.getClientScripts === 'function') {
+        const out = await src.getClientScripts(ctx);
+        if (Array.isArray(out)) scripts = out;
+      } else if (Array.isArray(src.__mini_next_scripts)) {
+        scripts = src.__mini_next_scripts;
+      } else if (Array.isArray(src.scripts)) {
+        scripts = src.scripts;
+      }
+    }
+
+    for (const p of plugins) {
+      if (!p || typeof p.getClientScripts !== 'function') continue;
+      const out = await p.getClientScripts(ctx);
+      if (Array.isArray(out) && out.length > 0) scripts = scripts.concat(out);
     }
 
     const uniq = [];
@@ -518,13 +525,73 @@ function createMiniNextServer(options = {}) {
     return outHtml;
   }
 
+  function sendPluginResponse(res, out) {
+    if (!out || typeof out !== 'object' || out.handled !== true) return false;
+    const status = out.status;
+    if (typeof status === 'number' && Number.isFinite(status)) {
+      res.status(status);
+    }
+    const headers = out.headers;
+    if (headers && typeof headers === 'object') {
+      for (const [k, v] of Object.entries(headers)) {
+        if (v == null) continue;
+        try {
+          res.setHeader(k, String(v));
+        } catch (_) {
+        }
+      }
+    }
+    if (out.body != null) {
+      res.send(out.body);
+    } else {
+      res.end();
+    }
+    return true;
+  }
+
   async function runPlugins(name, ctx) {
     for (const p of plugins) {
       if (!p) continue;
       const fn = p[name];
       if (typeof fn !== 'function') continue;
-      await fn.call(p, ctx);
+      try {
+        await fn.call(p, ctx);
+      } catch (_) {
+      }
+      if (ctx && ctx.res && ctx.res.headersSent) return;
     }
+  }
+
+  async function runPluginsWithControl(name, ctx) {
+    let next = ctx && typeof ctx === 'object' ? { ...ctx } : {};
+    for (const p of plugins) {
+      if (!p) continue;
+      const fn = p[name];
+      if (typeof fn !== 'function') continue;
+      let out = null;
+      try {
+        out = await fn.call(p, next);
+      } catch (_) {
+        out = null;
+      }
+      if (next.res && next.res.headersSent) {
+        return { handled: true, ctx: next };
+      }
+      if (sendPluginResponse(next.res, out)) {
+        return { handled: true, ctx: next };
+      }
+      if (out && typeof out === 'object') {
+        if (typeof out.urlPath === 'string') next.urlPath = out.urlPath;
+        if (typeof out.modulePath === 'string') next.modulePath = out.modulePath;
+        if (out.params && typeof out.params === 'object') next.params = out.params;
+      }
+    }
+    return { handled: false, ctx: next };
+  }
+
+  async function runErrorPlugins(err, req, res, ctx) {
+    const out = await runPluginsWithControl('onError', { err, req, res, ctx });
+    return out.handled === true;
   }
 
   function renderErrorPage(err, req) {
@@ -799,35 +866,51 @@ function createMiniNextServer(options = {}) {
         }
       }
 
-      const urlPath = req.path || '/';
-      await runPlugins('onRequest', { req, res, urlPath });
+      let urlPath = req.path || '/';
+      const reqOut = await runPluginsWithControl('onRequest', { req, res, urlPath });
+      if (reqOut.handled) return;
+      urlPath = String(reqOut.ctx.urlPath || urlPath);
+
       const match = routeMatcher.match(urlPath);
       if (!match || match.matched !== true || !match.filePath) {
-        res.status(404).send('Not Found');
+        const nf = await runPluginsWithControl('onNotFound', { req, res, urlPath });
+        if (nf.handled) return;
+        res.status(404);
+        await runPlugins('onResponse', { req, res, urlPath, statusCode: res.statusCode });
+        res.send('Not Found');
         return;
       }
 
-      const modulePath = match.filePath;
-      await runPlugins('onPageResolved', { req, res, urlPath, modulePath, params: match.params || {} });
+      let modulePath = match.filePath;
+      let params = match.params || {};
+      const prOut = await runPluginsWithControl('onPageResolved', { req, res, urlPath, modulePath, params });
+      if (prOut.handled) return;
+      urlPath = String(prOut.ctx.urlPath || urlPath);
+      modulePath = String(prOut.ctx.modulePath || modulePath);
+      params = prOut.ctx.params && typeof prOut.ctx.params === 'object' ? prOut.ctx.params : params;
+
       const pageModule = await loadModuleWithEsmFallback(modulePath, { cacheBust: !isProd });
       const Component = normalizePageModule(pageModule);
 
       if (!Component) {
-        res.status(500).send(`Invalid page module: ${modulePath}`);
+        res.status(500);
+        await runPlugins('onResponse', { req, res, urlPath, modulePath, params, statusCode: res.statusCode });
+        res.send(`Invalid page module: ${modulePath}`);
         return;
       }
 
-      const ctx = { req, res, params: match.params || {}, query: req.query || {}, urlPath, modulePath };
+      const ctx = { req, res, params, query: req.query || {}, urlPath, modulePath };
       const isStatic = isProd
         && pageModule
         && typeof pageModule.getStaticProps === 'function'
         && typeof pageModule.getServerSideProps !== 'function';
 
       if (isStatic) {
-        const key = isrKey(modulePath, urlPath, match.params || {});
+        const key = isrKey(modulePath, urlPath, params);
         const cached = lruGet(isrCache, key);
         if (isFreshIsr(cached)) {
           res.setHeader('content-type', 'text/html; charset=utf-8');
+          await runPlugins('onResponse', { req, res, urlPath, modulePath, params, statusCode: res.statusCode });
           res.send(cached.html);
           return;
         }
@@ -837,7 +920,7 @@ function createMiniNextServer(options = {}) {
         const props = await applyPropsPlugins(propsRaw, ctx);
         const revalidateMs = staticOut && staticOut.revalidateSec != null ? staticOut.revalidateSec * 1000 : null;
 
-        const pageData = JSON.stringify({ props, route: { path: urlPath, params: match.params || {} } })
+        const pageData = JSON.stringify({ props, route: { path: urlPath, params } })
           .replaceAll('<', '\\u003c')
           .replaceAll('>', '\\u003e')
           .replaceAll('&', '\\u0026')
@@ -852,7 +935,7 @@ function createMiniNextServer(options = {}) {
             return { bodyHtml: String(bodyHtml || '') };
           }
           const html = renderer.renderToString(Component, props, {
-            route: { path: urlPath, params: match.params },
+            route: { path: urlPath, params },
             scriptsHtml,
           });
           return { html: String(html || '') };
@@ -872,14 +955,14 @@ function createMiniNextServer(options = {}) {
           )
           : injectStylesHtml(renderOut.result.html, renderOut.stylesHtml);
         const html = await applyHtmlPlugins(htmlRaw, ctx);
-        await runPlugins('onRendered', { req, res, urlPath, modulePath, params: match.params || {}, html });
+        await runPlugins('onRendered', { req, res, urlPath, modulePath, params, html });
 
         const limit = Number(options.isrCacheSize || process.env.ISR_CACHE_SIZE || 256);
         lruSet(isrCache, key, { html, generatedAt: Date.now(), revalidateMs }, Number.isFinite(limit) && limit > 0 ? limit : 256);
         isrIndexAdd(modulePath, key);
 
         res.setHeader('content-type', 'text/html; charset=utf-8');
-        await runPlugins('onResponse', { req, res, urlPath, modulePath, params: match.params || {}, statusCode: res.statusCode });
+        await runPlugins('onResponse', { req, res, urlPath, modulePath, params, statusCode: res.statusCode });
         res.send(html);
         return;
       }
@@ -895,7 +978,7 @@ function createMiniNextServer(options = {}) {
         return;
       }
 
-      const pageData = JSON.stringify({ props, route: { path: urlPath, params: match.params || {} } })
+      const pageData = JSON.stringify({ props, route: { path: urlPath, params } })
         .replaceAll('<', '\\u003c')
         .replaceAll('>', '\\u003e')
         .replaceAll('&', '\\u0026')
@@ -910,7 +993,7 @@ function createMiniNextServer(options = {}) {
           return { bodyHtml: String(bodyHtml || '') };
         }
         const html = renderer.renderToString(Component, props, {
-          route: { path: urlPath, params: match.params },
+          route: { path: urlPath, params },
           scriptsHtml,
         });
         return { html: String(html || '') };
@@ -930,12 +1013,14 @@ function createMiniNextServer(options = {}) {
         )
         : injectStylesHtml(renderOut.result.html, renderOut.stylesHtml);
       const html = await applyHtmlPlugins(htmlRaw, ctx);
-      await runPlugins('onRendered', { req, res, urlPath, modulePath, params: match.params || {}, html });
+      await runPlugins('onRendered', { req, res, urlPath, modulePath, params, html });
       ssrCache.set(cacheKey, html);
       res.setHeader('content-type', 'text/html; charset=utf-8');
-      await runPlugins('onResponse', { req, res, urlPath, modulePath, params: match.params || {}, statusCode: res.statusCode });
+      await runPlugins('onResponse', { req, res, urlPath, modulePath, params, statusCode: res.statusCode });
       res.send(html);
     } catch (err) {
+      const handled = await runErrorPlugins(err, req, res, null);
+      if (handled) return;
       res.status(500);
       res.setHeader('content-type', 'text/html; charset=utf-8');
       res.send(renderErrorPage(err, req));

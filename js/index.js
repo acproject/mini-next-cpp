@@ -2,6 +2,7 @@ const { createMiniNextServer, startMiniNextDevServer } = require('./server');
 const { renderDocument, renderPage } = require('./renderer');
 const { getInitialPageData } = require('./client');
 const { css, runWithStyleRegistry } = require('./css');
+const { createMiniNextEdgeHandler } = require('./edge');
 
 module.exports = {
   createMiniNextServer,
@@ -11,4 +12,5 @@ module.exports = {
   getInitialPageData,
   css,
   runWithStyleRegistry,
+  createMiniNextEdgeHandler,
 };

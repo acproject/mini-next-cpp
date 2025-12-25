@@ -395,6 +395,89 @@ async function main() {
   });
 
   await new Promise((resolve, reject) => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-next-cpp-plugin2-'));
+    const pagesDir = path.join(rootDir, 'pages');
+    const publicDir = path.join(rootDir, 'public');
+    try {
+      writeFile(path.join(pagesDir, 'index.js'), "module.exports = () => 'home';");
+      writeFile(path.join(pagesDir, 'user', '[id].js'), "module.exports = (props) => 'id=' + String(props && props.params ? props.params.id : '');");
+
+      const http = require('http');
+      const { createMiniNextServer } = require('../js/server');
+      const { app, close } = createMiniNextServer({
+        pagesDir,
+        publicDir,
+        isProd: true,
+        plugins: [
+          {
+            onRequest(ctx) {
+              if (ctx && ctx.urlPath === '/rewritten') return { urlPath: '/user/123' };
+              return null;
+            },
+            onNotFound(ctx) {
+              if (ctx && ctx.urlPath === '/missing') return { handled: true, status: 418, body: 'teapot' };
+              return null;
+            },
+            getClientScripts() {
+              return ['/global.js'];
+            },
+          },
+        ],
+      });
+
+      const server = app.listen(0, async () => {
+        const port = server.address().port;
+        const get = (p) => new Promise((res, rej) => {
+          const req = http.request({ hostname: '127.0.0.1', port, path: p, method: 'GET' }, (r) => {
+            let data = '';
+            r.setEncoding('utf8');
+            r.on('data', (c) => (data += c));
+            r.on('end', () => res({ status: r.statusCode, body: data }));
+          });
+          req.on('error', rej);
+          req.end();
+        });
+
+        try {
+          const r1 = await get('/rewritten');
+          assert.strictEqual(r1.status, 200);
+          assert.ok(r1.body.includes('id=123'));
+          assert.ok(r1.body.includes('<script src="/global.js"></script>'));
+
+          const r2 = await get('/missing');
+          assert.strictEqual(r2.status, 418);
+          assert.ok(r2.body.includes('teapot'));
+        } catch (e) {
+          server.close(() => {
+            try {
+              close();
+            } finally {
+              fs.rmSync(rootDir, { recursive: true, force: true });
+              reject(e);
+            }
+          });
+          return;
+        }
+
+        server.close(() => {
+          try {
+            close();
+          } finally {
+            fs.rmSync(rootDir, { recursive: true, force: true });
+            resolve();
+          }
+        });
+      });
+    } catch (e) {
+      try {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      } finally {
+        reject(e);
+      }
+    }
+  });
+
+  await new Promise((resolve, reject) => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-next-cpp-cli-'));
     try {
       const cli = require('../js/create-mini-next-app');
@@ -419,6 +502,76 @@ async function main() {
       }
     }
   });
+
+  {
+    const { createMiniNextEdgeHandler } = require('../js/edge');
+    const handler = createMiniNextEdgeHandler({
+      routes: {
+        '/': (props) => `edge-ok:${String(props && props.added ? props.added : '')}`,
+        '/user/[id]': (props) => `id=${props && props.params ? props.params.id : ''},x=${String(props && props.query ? props.query.x || '' : '')},extra=${String(props && props.extra ? props.extra : '')}`,
+        '/boom': () => {
+          throw new Error('boom');
+        },
+      },
+      plugins: [
+        {
+          onRequest(ctx) {
+            if (ctx && ctx.urlPath === '/rewritten') return { urlPath: '/user/123' };
+          },
+          onPageResolved(ctx) {
+            if (ctx && ctx.urlPath === '/user/999') return { params: { id: '321' } };
+          },
+          onNotFound(ctx) {
+            if (ctx && ctx.urlPath === '/missing') return { handled: true, status: 418, body: 'teapot' };
+          },
+          onError(ctx) {
+            if (ctx && ctx.urlPath === '/boom') return { handled: true, status: 520, body: 'edge-error' };
+          },
+          getClientScripts() {
+            return ['/global.js'];
+          },
+          extendPageProps(props) {
+            const base = props && typeof props === 'object' ? props : {};
+            return { ...base, extra: 'x', added: '1' };
+          },
+          transformHtml(html) {
+            return String(html).replace('edge-ok', 'edge-ok-x');
+          },
+        },
+      ],
+    });
+
+    const r1 = await handler(new Request('http://localhost/'));
+    assert.strictEqual(r1.status, 200);
+    const t1 = await r1.text();
+    assert.ok(t1.includes('edge-ok-x'));
+    assert.ok(t1.includes('<script src="/global.js"></script>'));
+
+    const r2 = await handler(new Request('http://localhost/rewritten?x=1'));
+    assert.strictEqual(r2.status, 200);
+    const t2 = await r2.text();
+    assert.ok(t2.includes('id=123'));
+    assert.ok(t2.includes('x=1'));
+    assert.ok(t2.includes('extra=x'));
+
+    const r3 = await handler(new Request('http://localhost/user/999'));
+    assert.strictEqual(r3.status, 200);
+    const t3 = await r3.text();
+    assert.ok(t3.includes('id=321'));
+
+    const r4 = await handler(new Request('http://localhost/missing'));
+    assert.strictEqual(r4.status, 418);
+    const t4 = await r4.text();
+    assert.ok(t4.includes('teapot'));
+
+    const r5 = await handler(new Request('http://localhost/boom'));
+    assert.strictEqual(r5.status, 520);
+    const t5 = await r5.text();
+    assert.ok(t5.includes('edge-error'));
+
+    const r6 = await handler(new Request('http://localhost/nope'));
+    assert.strictEqual(r6.status, 404);
+  }
 
   withTempDir((tmpDir) => {
     const pagePath = path.join(tmpDir, 'page.js');

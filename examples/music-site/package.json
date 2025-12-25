@@ -1,0 +1,13 @@
+{
+  "name": "music-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "mini-next-cpp": "file:../..",
+    "better-sqlite3": "^11.10.0"
+  }
+}
