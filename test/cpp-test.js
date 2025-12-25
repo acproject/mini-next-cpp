@@ -152,7 +152,9 @@ async function main() {
 
           let hasSharp = false;
           try {
-            hasSharp = !!require('sharp');
+            const sharp = require('sharp');
+            await sharp(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/wIAAgMBAp0N/QAAAABJRU5ErkJggg==', 'base64')).webp({ quality: 80 }).toBuffer();
+            hasSharp = true;
           } catch (_) {
             hasSharp = false;
           }

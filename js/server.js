@@ -803,53 +803,56 @@ function createMiniNextServer(options = {}) {
       }
 
       if (sharp) {
-        const key = `${abs}|${Number(stat ? stat.size : 0)}|${Number(stat ? stat.mtimeMs : 0)}|w=${width || ''}|h=${height || ''}|q=${quality}|f=${format || ''}`;
-        const cached = lruGet(imageCache, key);
-        if (cached && cached.etag === res.getHeader('etag')) {
-          res.setHeader('content-type', cached.contentType);
+        try {
+          const key = `${abs}|${Number(stat ? stat.size : 0)}|${Number(stat ? stat.mtimeMs : 0)}|w=${width || ''}|h=${height || ''}|q=${quality}|f=${format || ''}`;
+          const cached = lruGet(imageCache, key);
+          if (cached && cached.etag === res.getHeader('etag')) {
+            res.setHeader('content-type', cached.contentType);
+            res.setHeader('cache-control', isProd ? 'public, max-age=3600' : 'no-cache');
+            res.end(cached.buf);
+            return;
+          }
+
+          let img = sharp(abs);
+          if (width || height) {
+            const resizeOpts = { withoutEnlargement: true };
+            if (width) resizeOpts.width = width;
+            if (height) resizeOpts.height = height;
+            img = img.resize(resizeOpts);
+          }
+
+          const outFormat = format || (ext === '.png' ? 'png' : 'jpeg');
+          if (outFormat === 'jpeg') {
+            img = img.jpeg({ quality, mozjpeg: true });
+          } else if (outFormat === 'webp') {
+            img = img.webp({ quality });
+          } else if (outFormat === 'avif') {
+            img = img.avif({ quality });
+          } else if (outFormat === 'png') {
+            img = img.png({ compressionLevel: 9 });
+          }
+
+          const buf = await img.toBuffer();
+          const contentType = outFormat === 'jpeg'
+            ? 'image/jpeg'
+            : outFormat === 'webp'
+              ? 'image/webp'
+              : outFormat === 'avif'
+                ? 'image/avif'
+                : outFormat === 'png'
+                  ? 'image/png'
+                  : 'application/octet-stream';
+
+          const etagNow = String(res.getHeader('etag') || '');
+          const limit = Number(options.imageCacheSize || process.env.IMAGE_CACHE_SIZE || 128);
+          lruSet(imageCache, key, { buf, contentType, etag: etagNow }, Number.isFinite(limit) && limit > 0 ? limit : 128);
+
+          res.setHeader('content-type', contentType);
           res.setHeader('cache-control', isProd ? 'public, max-age=3600' : 'no-cache');
-          res.end(cached.buf);
+          res.end(buf);
           return;
+        } catch (_) {
         }
-
-        let img = sharp(abs);
-        if (width || height) {
-          const resizeOpts = { withoutEnlargement: true };
-          if (width) resizeOpts.width = width;
-          if (height) resizeOpts.height = height;
-          img = img.resize(resizeOpts);
-        }
-
-        const outFormat = format || (ext === '.png' ? 'png' : 'jpeg');
-        if (outFormat === 'jpeg') {
-          img = img.jpeg({ quality, mozjpeg: true });
-        } else if (outFormat === 'webp') {
-          img = img.webp({ quality });
-        } else if (outFormat === 'avif') {
-          img = img.avif({ quality });
-        } else if (outFormat === 'png') {
-          img = img.png({ compressionLevel: 9 });
-        }
-
-        const buf = await img.toBuffer();
-        const contentType = outFormat === 'jpeg'
-          ? 'image/jpeg'
-          : outFormat === 'webp'
-            ? 'image/webp'
-            : outFormat === 'avif'
-              ? 'image/avif'
-              : outFormat === 'png'
-                ? 'image/png'
-                : 'application/octet-stream';
-
-        const etagNow = String(res.getHeader('etag') || '');
-        const limit = Number(options.imageCacheSize || process.env.IMAGE_CACHE_SIZE || 128);
-        lruSet(imageCache, key, { buf, contentType, etag: etagNow }, Number.isFinite(limit) && limit > 0 ? limit : 128);
-
-        res.setHeader('content-type', contentType);
-        res.setHeader('cache-control', isProd ? 'public, max-age=3600' : 'no-cache');
-        res.end(buf);
-        return;
       }
     }
 
