@@ -194,14 +194,13 @@ static void handleClient(int fd, const std::filesystem::path &rootDir,
 static int parsePort(const char *s) {
   if (!s)
     return 3000;
-  try {
-    const int p = std::stoi(std::string(s));
-    if (p <= 0 || p > 65535)
-      return 3000;
-    return p;
-  } catch (...) {
+  char *end = nullptr;
+  const long v = std::strtol(s, &end, 10);
+  if (!end || *end != '\0')
     return 3000;
-  }
+  if (v <= 0 || v > 65535)
+    return 3000;
+  return (int)v;
 }
 
 int main(int argc, char **argv) {

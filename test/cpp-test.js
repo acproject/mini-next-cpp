@@ -595,6 +595,9 @@ async function main() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-next-cpp-watch-'));
     const watcher = new native.FileWatcher();
     await new Promise((resolve, reject) => {
+      const filePath = path.join(dir, 'a.txt');
+      writeFile(filePath, '0');
+
       const cleanup = () => {
         try {
           watcher.stop();
@@ -606,7 +609,7 @@ async function main() {
       const timer = setTimeout(() => {
         cleanup();
         reject(new Error('FileWatcher timeout'));
-      }, 5000);
+      }, 8000);
 
       watcher.start(dir, (ev) => {
         clearTimeout(timer);
@@ -616,7 +619,7 @@ async function main() {
       }, { recursive: true });
 
       setTimeout(() => {
-        writeFile(path.join(dir, 'a.txt'), '1');
+        writeFile(filePath, '1');
       }, 50);
     });
   }

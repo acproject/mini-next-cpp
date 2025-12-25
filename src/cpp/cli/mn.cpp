@@ -21,7 +21,7 @@ static std::filesystem::path getExecutablePath(const char *argv0) {
 static std::filesystem::path
 findPackageRootFromExecutable(const std::filesystem::path &exePath) {
   auto cur = exePath.parent_path();
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 2; i++) {
     if (cur.has_parent_path())
       cur = cur.parent_path();
   }
@@ -38,7 +38,7 @@ static void writeUsage() {
                     "  --music\n"
                     "  --db <none|sqlite>\n"
                     "  --css <none|tailwind|pico|bootstrap>\n"
-                    "  --ui <none|daisyui|preline>\n"
+                    "  --ui <none|daisyui|preline|flowbite>\n"
                     "  --no-install\n"
                     "  --help\n"
                     "\n";

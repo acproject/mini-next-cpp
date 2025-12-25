@@ -67,7 +67,7 @@ function usage() {
     'Usage:',
     '  create-mini-next-app <dir> [--ts] [--template <basic|music>]',
     '    [--css <none|tailwind|pico|bootstrap>]',
-    '    [--ui <none|daisyui|preline>]',
+    '    [--ui <none|daisyui|preline|flowbite>]',
     '    [--db <none|sqlite>]',
     '    [--no-install]',
     '',
@@ -141,6 +141,10 @@ function buildAppPlugin({ css, ui, enableAuth }) {
     lines.push('  getClientScripts() {');
     lines.push("    return ['https://cdn.jsdelivr.net/npm/preline@2.5.1/dist/preline.js'];");
     lines.push('  },');
+  } else if (ui === 'flowbite') {
+    lines.push('  getClientScripts() {');
+    lines.push("    return ['https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js'];");
+    lines.push('  },');
   }
   lines.push('  extendPageProps(props) {');
   lines.push('    const base = props && typeof props === "object" ? props : {};');
@@ -154,12 +158,17 @@ function buildAppPlugin({ css, ui, enableAuth }) {
 function buildTailwindConfig({ ui }) {
   const plugins = [];
   if (ui === 'daisyui') plugins.push('require("daisyui")');
+  if (ui === 'flowbite') plugins.push('require("flowbite/plugin")');
+  const content = [
+    './pages/**/*.{js,jsx,ts,tsx}',
+    './plugins/**/*.{js,cjs}',
+  ];
+  if (ui === 'flowbite') content.push('./node_modules/flowbite/**/*.js');
   return [
     '/** @type {import("tailwindcss").Config} */',
     'module.exports = {',
     '  content: [',
-    '    "./pages/**/*.{js,jsx,ts,tsx}",',
-    '    "./plugins/**/*.{js,cjs}",',
+    ...content.map((p) => `    ${JSON.stringify(p)},`),
     '  ],',
     '  theme: { extend: {} },',
     `  plugins: [${plugins.join(', ')}],`,
@@ -170,7 +179,7 @@ function buildTailwindConfig({ ui }) {
 
 function buildBasicTemplate({ appName, typescript, css, ui }) {
   const cssChoice = normalizeChoice(css, ['none', 'tailwind', 'pico', 'bootstrap'], 'none');
-  const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline'], 'none');
+  const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline', 'flowbite'], 'none');
   const pkg = {
     name: appName,
     version: '0.1.0',
@@ -184,11 +193,14 @@ function buildBasicTemplate({ appName, typescript, css, ui }) {
     },
   };
   if (cssChoice === 'tailwind') {
-    pkg.scripts['build:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --minify';
-    pkg.scripts['dev:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --watch';
-    pkg.devDependencies = { tailwindcss: '^4.1.10' };
+    pkg.scripts['build:css'] = 'tailwindcss -c ./tailwind.config.cjs -i ./styles/tailwind.css -o ./public/tailwind.css --minify';
+    pkg.scripts['dev:css'] = 'tailwindcss -c ./tailwind.config.cjs -i ./styles/tailwind.css -o ./public/tailwind.css --watch';
+    pkg.devDependencies = { tailwindcss: '^3.4.17' };
     if (uiChoice === 'daisyui') {
-      pkg.devDependencies.daisyui = '^5.0.0';
+      pkg.devDependencies.daisyui = '^4.12.14';
+    }
+    if (uiChoice === 'flowbite') {
+      pkg.devDependencies.flowbite = '^2.5.2';
     }
   }
 
@@ -270,7 +282,7 @@ function buildMusicTemplate({ appName, css, ui, db }) {
 `;
 
   const cssChoice = normalizeChoice(css, ['none', 'tailwind', 'pico', 'bootstrap'], 'none');
-  const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline'], 'none');
+  const uiChoice = normalizeChoice(ui, ['none', 'daisyui', 'preline', 'flowbite'], 'none');
   const dbChoice = normalizeChoice(db, ['none', 'sqlite'], 'none');
   const enableAuth = dbChoice === 'sqlite';
 
@@ -290,11 +302,14 @@ function buildMusicTemplate({ appName, css, ui, db }) {
     pkg.dependencies['better-sqlite3'] = '^11.10.0';
   }
   if (cssChoice === 'tailwind') {
-    pkg.scripts['build:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --minify';
-    pkg.scripts['dev:css'] = 'tailwindcss -i ./styles/tailwind.css -o ./public/tailwind.css --watch';
-    pkg.devDependencies = { tailwindcss: '^4.1.10' };
+    pkg.scripts['build:css'] = 'tailwindcss -c ./tailwind.config.cjs -i ./styles/tailwind.css -o ./public/tailwind.css --minify';
+    pkg.scripts['dev:css'] = 'tailwindcss -c ./tailwind.config.cjs -i ./styles/tailwind.css -o ./public/tailwind.css --watch';
+    pkg.devDependencies = { tailwindcss: '^3.4.17' };
     if (uiChoice === 'daisyui') {
-      pkg.devDependencies.daisyui = '^5.0.0';
+      pkg.devDependencies.daisyui = '^4.12.14';
+    }
+    if (uiChoice === 'flowbite') {
+      pkg.devDependencies.flowbite = '^2.5.2';
     }
   }
 
