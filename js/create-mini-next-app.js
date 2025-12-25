@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
+const readline = require('readline');
 
 function parseArgs(argv) {
   const out = {
@@ -70,6 +71,8 @@ function usage() {
     '    [--ui <none|daisyui|preline|flowbite>]',
     '    [--db <none|sqlite>]',
     '    [--no-install]',
+    '  create-mini-next-app',
+    '    (run without args to use interactive mode)',
     '',
     'Examples:',
     '  create-mini-next-app my-app',
@@ -189,6 +192,8 @@ function buildBasicTemplate({ appName, typescript, css, ui, miniNextDependency }
       dev: 'node server.js',
     },
     dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
       'mini-next-cpp': String(miniNextDependency || '^1.0.0'),
     },
   };
@@ -300,6 +305,8 @@ function buildMusicTemplate({ appName, css, ui, db, miniNextDependency }) {
       dev: 'node server.js',
     },
     dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
       'mini-next-cpp': String(miniNextDependency || '^1.0.0'),
     },
   };
@@ -1089,6 +1096,92 @@ function resolveMiniNextDependency(targetAbs) {
   }
 }
 
+function isYes(input) {
+  const v = String(input || '').trim().toLowerCase();
+  return v === 'y' || v === 'yes' || v === 'true' || v === '1';
+}
+
+function isNo(input) {
+  const v = String(input || '').trim().toLowerCase();
+  return v === 'n' || v === 'no' || v === 'false' || v === '0';
+}
+
+function createReadline() {
+  return readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+}
+
+function question(rl, q) {
+  return new Promise((resolve) => {
+    rl.question(q, (answer) => resolve(String(answer || '')));
+  });
+}
+
+async function promptText(rl, label, defaultValue) {
+  const def = defaultValue != null ? String(defaultValue) : '';
+  const suffix = def ? ` (${def})` : '';
+  const ans = (await question(rl, `${label}${suffix}: `)).trim();
+  return ans ? ans : def;
+}
+
+async function promptConfirm(rl, label, defaultValue) {
+  const def = defaultValue === true;
+  for (; ;) {
+    const hint = def ? 'Y/n' : 'y/N';
+    const ans = (await question(rl, `${label} (${hint}): `)).trim();
+    if (!ans) return def;
+    if (isYes(ans)) return true;
+    if (isNo(ans)) return false;
+  }
+}
+
+async function promptChoice(rl, label, choices, defaultValue) {
+  const allow = Array.isArray(choices) ? choices.map((v) => String(v)) : [];
+  const def = defaultValue != null ? String(defaultValue) : allow[0] || '';
+  for (; ;) {
+    process.stdout.write(`${label}:\n`);
+    for (let i = 0; i < allow.length; i++) {
+      const v = allow[i];
+      const mark = v === def ? '*' : ' ';
+      process.stdout.write(`  ${mark} ${i + 1}) ${v}\n`);
+    }
+    const ans = (await question(rl, `Select (1-${allow.length}) (${def}): `)).trim();
+    if (!ans) return def;
+    const idx = Number(ans);
+    if (Number.isFinite(idx) && idx >= 1 && idx <= allow.length) {
+      return allow[idx - 1];
+    }
+    const byName = allow.find((v) => v.toLowerCase() === ans.toLowerCase());
+    if (byName) return byName;
+  }
+}
+
+async function promptInteractive(args) {
+  const rl = createReadline();
+  try {
+    const dir = await promptText(rl, 'Project directory', 'mini-next-app');
+    const typescript = await promptConfirm(rl, 'Use TypeScript', args.typescript === true);
+    const template = await promptChoice(rl, 'Template', ['basic', 'music'], args.template || 'basic');
+    const css = await promptChoice(rl, 'CSS', ['tailwind', 'pico', 'bootstrap', 'none'], args.css || 'tailwind');
+    const ui = await promptChoice(rl, 'UI', ['daisyui', 'preline', 'flowbite', 'none'], args.ui || 'daisyui');
+    const db = await promptChoice(rl, 'Database', ['none', 'sqlite'], args.db || 'none');
+    const install = await promptConfirm(rl, 'Run npm install', args.install !== false);
+    return {
+      dir,
+      typescript,
+      template,
+      css,
+      ui,
+      db,
+      install,
+    };
+  } finally {
+    rl.close();
+  }
+}
+
 async function createApp(targetDir, options = {}) {
   const typescript = options.typescript === true;
   const template = String(options.template || 'basic');
@@ -1141,9 +1234,23 @@ async function createApp(targetDir, options = {}) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.help || !args.dir) {
+  if (args.help) {
     process.stdout.write(usage());
-    process.exit(args.help ? 0 : 1);
+    process.exit(0);
+  }
+  if (!args.dir) {
+    if (!process.stdin.isTTY) {
+      process.stdout.write(usage());
+      process.exit(1);
+    }
+    const picked = await promptInteractive(args);
+    args.dir = picked.dir;
+    args.typescript = picked.typescript;
+    args.template = picked.template;
+    args.css = picked.css;
+    args.ui = picked.ui;
+    args.db = picked.db;
+    args.install = picked.install;
   }
   try {
     const out = await createApp(args.dir, {

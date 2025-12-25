@@ -62,11 +62,21 @@ cd my-app
 npm run dev
 ```
 
+交互模式（不带参数直接运行，会进入目录/模板/CSS/UI/DB/安装等选择）：
+
+```bash
+npx create-mini-next-app
+```
+
 常用参数：
 
 ```bash
 npx create-mini-next-app my-app --template music --db sqlite --css tailwind --ui daisyui
 ```
+
+说明：
+
+- 生成项目默认包含 `react` / `react-dom` 依赖（用于 SSR 渲染）
 
 可选项：
 
@@ -74,6 +84,7 @@ npx create-mini-next-app my-app --template music --db sqlite --css tailwind --ui
 - `--db <none|sqlite>`（默认 `none`）
 - `--css <none|tailwind|pico|bootstrap>`（默认 `tailwind`）
 - `--ui <none|daisyui|preline|flowbite>`（默认 `daisyui`）
+- `--ts`
 - `--no-install`
 
 ## C++ CLI（mn）
@@ -82,6 +93,12 @@ npx create-mini-next-app my-app --template music --db sqlite --css tailwind --ui
 
 ```bash
 mn create my-app --template music --db sqlite --css tailwind --ui daisyui
+```
+
+交互模式（基于 FTXUI）：
+
+```bash
+mn
 ```
 
 ## C++ 静态部署服务器（mini-next-serve）
@@ -204,4 +221,3 @@ addEventListener('fetch', (event) => {
 ## License
 
 MIT
-

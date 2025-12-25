@@ -3,6 +3,10 @@
 #include <string>
 #include <vector>
 
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/dom/elements.hpp>
+
 #if defined(_WIN32)
 #include <process.h>
 #else
@@ -32,6 +36,7 @@ static void writeUsage() {
   const char *msg = "Usage:\n"
                     "  mn create <dir> [options]\n"
                     "  mn <dir> [options]\n"
+                    "  mn\n"
                     "\n"
                     "Options:\n"
                     "  --template <basic|music>\n"
@@ -39,6 +44,7 @@ static void writeUsage() {
                     "  --db <none|sqlite>\n"
                     "  --css <none|tailwind|pico|bootstrap>\n"
                     "  --ui <none|daisyui|preline|flowbite>\n"
+                    "  --ts\n"
                     "  --no-install\n"
                     "  --help\n"
                     "\n";
@@ -47,6 +53,157 @@ static void writeUsage() {
 #else
   ::write(1, msg, strlen(msg));
 #endif
+}
+
+struct MnInteractiveResult {
+  bool ok = false;
+  std::vector<std::string> args;
+};
+
+static MnInteractiveResult runInteractiveTui() {
+  using namespace ftxui;
+
+  MnInteractiveResult result;
+
+  std::string dir = "mini-next-app";
+  bool typescript = false;
+  bool install = true;
+
+  std::vector<std::string> templates = {"basic", "music"};
+  int template_index = 0;
+
+  std::vector<std::string> css_list = {"tailwind", "pico", "bootstrap", "none"};
+  int css_index = 0;
+
+  std::vector<std::string> ui_list = {"daisyui", "preline", "flowbite", "none"};
+  int ui_index = 0;
+
+  std::vector<std::string> db_list = {"none", "sqlite"};
+  int db_index = 0;
+
+  auto screen = ScreenInteractive::FitComponent();
+
+  auto dir_input = Input(&dir, "mini-next-app");
+  auto ts_checkbox = Checkbox("TypeScript (--ts)", &typescript);
+  auto install_checkbox = Checkbox("Auto install (npm install)", &install);
+
+  auto template_box = Radiobox(&templates, &template_index);
+  auto css_box = Radiobox(&css_list, &css_index);
+  auto ui_box = Radiobox(&ui_list, &ui_index);
+  auto db_box = Radiobox(&db_list, &db_index);
+
+  bool submitted = false;
+  bool canceled = false;
+  auto on_submit = [&] {
+    submitted = true;
+    screen.ExitLoopClosure()();
+  };
+  auto on_cancel = [&] {
+    canceled = true;
+    screen.ExitLoopClosure()();
+  };
+
+  auto create_btn = Button("Create", on_submit);
+  auto cancel_btn = Button("Cancel", on_cancel);
+
+  auto container = Container::Vertical({
+      dir_input,
+      ts_checkbox,
+      template_box,
+      css_box,
+      ui_box,
+      db_box,
+      install_checkbox,
+      Container::Horizontal({create_btn, cancel_btn}),
+  });
+
+  auto renderer = Renderer(container, [&] {
+    auto left = vbox({
+        text("Project directory") | bold,
+        dir_input->Render() | border,
+        separator(),
+        ts_checkbox->Render(),
+        separator(),
+        text("Template") | bold,
+        template_box->Render(),
+        separator(),
+        text("CSS") | bold,
+        css_box->Render(),
+    });
+
+    auto right = vbox({
+        text("UI") | bold,
+        ui_box->Render(),
+        separator(),
+        text("Database") | bold,
+        db_box->Render(),
+        separator(),
+        install_checkbox->Render(),
+        separator(),
+        hbox({
+            create_btn->Render() | border,
+            text(" "),
+            cancel_btn->Render() | border,
+        }),
+        separator(),
+        text("Tip: use Arrow keys + Enter / Space") | dim,
+    });
+
+    return vbox({
+               text("mini-next-cpp CLI") | bold,
+               separator(),
+               hbox({
+                   left | flex,
+                   separator(),
+                   right | flex,
+               }) | border,
+           }) |
+           flex;
+  });
+
+  screen.Loop(renderer);
+
+  if (canceled || !submitted)
+    return result;
+
+  std::string dir_trim = dir;
+  while (!dir_trim.empty() &&
+         (dir_trim.back() == ' ' || dir_trim.back() == '\n' ||
+          dir_trim.back() == '\r' || dir_trim.back() == '\t')) {
+    dir_trim.pop_back();
+  }
+  size_t start = 0;
+  while (start < dir_trim.size() &&
+         (dir_trim[start] == ' ' || dir_trim[start] == '\n' ||
+          dir_trim[start] == '\r' || dir_trim[start] == '\t')) {
+    start++;
+  }
+  if (start > 0)
+    dir_trim = dir_trim.substr(start);
+  if (dir_trim.empty())
+    dir_trim = "mini-next-app";
+
+  result.ok = true;
+  result.args.push_back(dir_trim);
+  if (typescript)
+    result.args.push_back("--ts");
+
+  result.args.push_back("--template");
+  result.args.push_back(templates[(size_t)template_index]);
+
+  result.args.push_back("--css");
+  result.args.push_back(css_list[(size_t)css_index]);
+
+  result.args.push_back("--ui");
+  result.args.push_back(ui_list[(size_t)ui_index]);
+
+  result.args.push_back("--db");
+  result.args.push_back(db_list[(size_t)db_index]);
+
+  if (!install)
+    result.args.push_back("--no-install");
+
+  return result;
 }
 
 static int execNode(const std::filesystem::path &scriptPath,
@@ -77,33 +234,41 @@ static int execNode(const std::filesystem::path &scriptPath,
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2) {
-    writeUsage();
-    return 1;
-  }
-
   std::vector<std::string> outArgs;
   outArgs.reserve((size_t)argc);
 
   int i = 1;
-  std::string cmd = argv[i] ? std::string(argv[i]) : std::string();
+  std::string cmd =
+      (argc >= 2 && argv[i]) ? std::string(argv[i]) : std::string();
   if (cmd == "-h" || cmd == "--help") {
     writeUsage();
     return 0;
   }
 
-  if (cmd == "create") {
-    i++;
-    if (i >= argc) {
-      writeUsage();
+  if (argc < 2) {
+    auto picked = runInteractiveTui();
+    if (!picked.ok)
       return 1;
+    outArgs = std::move(picked.args);
+  } else if (cmd == "create" && argc == 2) {
+    auto picked = runInteractiveTui();
+    if (!picked.ok)
+      return 1;
+    outArgs = std::move(picked.args);
+  } else {
+    if (cmd == "create") {
+      i++;
+      if (i >= argc) {
+        writeUsage();
+        return 1;
+      }
     }
-  }
 
-  for (; i < argc; i++) {
-    if (!argv[i])
-      continue;
-    outArgs.push_back(std::string(argv[i]));
+    for (; i < argc; i++) {
+      if (!argv[i])
+        continue;
+      outArgs.push_back(std::string(argv[i]));
+    }
   }
 
   const auto exe = getExecutablePath(argv[0]);
