@@ -274,7 +274,7 @@ function buildBasicTemplate({ appName, typescript, css, ui, miniNextDependency }
   return { files, dirs };
 }
 
-function buildMusicTemplate({ appName, css, ui, db, miniNextDependency }) {
+function buildMusicTemplate({ appName, typescript, css, ui, db, miniNextDependency }) {
   const coverSvg = (title, a, b) => `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
   <defs>
@@ -1022,17 +1022,52 @@ function buildMusicTemplate({ appName, css, ui, db, miniNextDependency }) {
     '',
   ].join('\n');
 
+  function toTypescriptPage(jsSource) {
+    let s = String(jsSource || '');
+    s = s.replace(/^const React = require\('react'\);\n/m, "import React from 'react';\n");
+    s = s.replace(/^const fs = require\('fs'\);\n/m, "import fs from 'fs';\n");
+    s = s.replace(/^const path = require\('path'\);\n/m, "import path from 'path';\n");
+    s = s.replace(/^const \{ css \} = require\('mini-next-cpp'\);\n/m, "import { css } from 'mini-next-cpp';\n");
+    s = s.replace(/^function Page\(props\) \{/m, 'function Page(props: any) {');
+
+    if (s.includes('Page.getServerSideProps = async')) {
+      s = s.replace(
+        /Page\.getServerSideProps = async \(ctx\) => \{/,
+        'export async function getServerSideProps(ctx: any) {'
+      );
+      s = s.replace(/\n};\n\nmodule\.exports = Page;\n/, '\n}\n\nexport default Page;\n');
+      return s;
+    }
+    if (s.includes('Page.getStaticProps = async')) {
+      s = s.replace(/Page\.getStaticProps = async \(\) => \{/, 'export async function getStaticProps() {');
+      s = s.replace(/\n};\n\nmodule\.exports = Page;\n/, '\n}\n\nexport default Page;\n');
+      return s;
+    }
+
+    s = s.replace(/\nmodule\.exports = Page;\n/, '\nexport default Page;\n');
+    return s;
+  }
+
+  const indexTs = toTypescriptPage(indexJs);
+  const loginTs = toTypescriptPage(loginJs);
+  const registerTs = toTypescriptPage(registerJs);
+  const profileTs = toTypescriptPage(profileJs);
+
   const files = {
     'package.json': `${JSON.stringify(pkg, null, 2)}\n`,
     'server.js': serverJs,
     [path.join('plugins', 'app.js')]: buildAppPlugin({ css: cssChoice, ui: uiChoice, enableAuth }),
     ...(enableAuth ? { [path.join('plugins', 'auth.js')]: authPluginJs } : {}),
-    [path.join('pages', 'index.js')]: indexJs,
-    ...(enableAuth ? {
+    ...(typescript ? { [path.join('pages', 'index.ts')]: indexTs } : { [path.join('pages', 'index.js')]: indexJs }),
+    ...(enableAuth ? (typescript ? {
+      [path.join('pages', 'login.ts')]: loginTs,
+      [path.join('pages', 'register.ts')]: registerTs,
+      [path.join('pages', 'profile.ts')]: profileTs,
+    } : {
       [path.join('pages', 'login.js')]: loginJs,
       [path.join('pages', 'register.js')]: registerJs,
       [path.join('pages', 'profile.js')]: profileJs,
-    } : {}),
+    }) : {}),
     [path.join('data', 'songs.json')]: songsJson,
   };
 
@@ -1203,7 +1238,7 @@ async function createApp(targetDir, options = {}) {
   const appName = normalizeAppName(abs);
   const miniNextDependency = resolveMiniNextDependency(abs);
   const tpl = template === 'music'
-    ? buildMusicTemplate({ appName, css, ui, db, miniNextDependency })
+    ? buildMusicTemplate({ appName, typescript, css, ui, db, miniNextDependency })
     : buildBasicTemplate({ appName, typescript, css, ui, miniNextDependency });
 
   for (const d of tpl.dirs || []) {
