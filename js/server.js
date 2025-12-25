@@ -42,6 +42,7 @@ function createPagesCompiler(pagesDir) {
   const moduleKindByFilename = new Map();
   const watchedPrefix = path.resolve(pagesDir) + path.sep;
   const originalJsExtension = Module._extensions['.js'];
+  const originalCjsExtension = Module._extensions['.cjs'];
   const originalJsxExtension = Module._extensions['.jsx'];
   const originalTsExtension = Module._extensions['.ts'];
   const originalTsxExtension = Module._extensions['.tsx'];
@@ -71,18 +72,14 @@ function createPagesCompiler(pagesDir) {
   }
 
   function detectModuleKindByName(filename) {
-    const name = String(filename || '');
-    if (name.includes('.client.')) return 'client';
-    if (name.includes('.server.')) return 'server';
+    const base = path.basename(String(filename || ''));
+    if (base.includes('.client.')) return 'client';
+    if (base.includes('.server.')) return 'server';
     return null;
   }
 
-  function detectDirectiveString(source) {
-    const s = String(source || '');
+  function skipJsSpaceAndComments(s, i) {
     const n = s.length;
-    let i = 0;
-    if (n >= 1 && s.charCodeAt(0) === 0xfeff) i++;
-
     while (i < n) {
       const c = s.charCodeAt(i);
       if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) {
@@ -110,31 +107,91 @@ function createPagesCompiler(pagesDir) {
       }
       break;
     }
+    return i;
+  }
 
-    if (i >= n) return null;
+  function skipShebang(s, i) {
+    if (i === 0 && s.startsWith('#!')) {
+      const nl = s.indexOf('\n', 2);
+      return nl === -1 ? s.length : nl + 1;
+    }
+    return i;
+  }
+
+  function parseJsStringLiteral(s, i) {
+    const n = s.length;
     const q = s[i];
     if (q !== '"' && q !== "'") return null;
     i++;
     let out = '';
     while (i < n) {
       const ch = s[i];
-      if (ch === q) break;
-      if (ch === '\\\\') return null;
+      if (ch === q) return { value: out, end: i + 1 };
+      if (ch === '\\') {
+        if (i + 1 >= n) return null;
+        const next = s[i + 1];
+        if (next === q || next === '\\') {
+          out += next;
+          i += 2;
+          continue;
+        }
+        return null;
+      }
       out += ch;
       i++;
     }
-    if (i >= n) return null;
-    i++;
+    return null;
+  }
+
+  function detectDirectivePrologue(source) {
+    const s = String(source || '');
+    const n = s.length;
+    let i = 0;
+    if (n >= 1 && s.charCodeAt(0) === 0xfeff) i++;
+    i = skipShebang(s, i);
+
+    const directives = [];
     while (i < n) {
-      const c = s.charCodeAt(i);
-      if (c === 0x20 || c === 0x09) {
-        i++;
-        continue;
-      }
-      break;
+      i = skipJsSpaceAndComments(s, i);
+      if (i >= n) break;
+
+      const parsed = parseJsStringLiteral(s, i);
+      if (!parsed) break;
+      directives.push(parsed.value);
+      i = parsed.end;
+
+      i = skipJsSpaceAndComments(s, i);
+      if (i < n && s[i] === ';') i++;
     }
-    if (i < n && s[i] === ';') i++;
-    return out;
+
+    return directives;
+  }
+
+  function stringifyKindDetection(filename, kind) {
+    if (!filename) return String(kind || '');
+    const base = path.basename(String(filename));
+    if (base.includes(`.${kind}.`)) return `filename:${kind}`;
+    return `directive:${kind}`;
+  }
+
+  class MiniNextComponentBoundaryError extends Error {
+    constructor(details) {
+      const importer = String(details && details.importer ? details.importer : '');
+      const imported = String(details && details.imported ? details.imported : '');
+      const importerKind = String(details && details.importerKind ? details.importerKind : '');
+      const importedKind = String(details && details.importedKind ? details.importedKind : '');
+      super(
+        [
+          'mini-next-cpp: client component cannot import server component',
+          `from: ${importer}`,
+          `import: ${imported}`,
+          `fromKind: ${importerKind}`,
+          `importKind: ${importedKind}`,
+        ].join('\n'),
+      );
+      this.name = 'MiniNextComponentBoundaryError';
+      this.code = 'MINI_NEXT_COMPONENT_BOUNDARY';
+    }
   }
 
   function getModuleKind(filename, sourceIfKnown) {
@@ -143,10 +200,37 @@ function createPagesCompiler(pagesDir) {
     if (isInNodeModules(abs)) return null;
 
     const byName = detectModuleKindByName(abs);
-    if (byName) return byName;
-
     const cached = moduleKindByFilename.get(abs);
-    if (cached) return cached;
+    if (cached != null) return cached === 'unknown' ? null : cached;
+
+    if (byName) {
+      if (sourceIfKnown != null) {
+        const directives = detectDirectivePrologue(sourceIfKnown);
+        const hasClient = directives.includes('use client');
+        const hasServer = directives.includes('use server');
+        if (hasClient && hasServer) {
+          throw new Error(
+            [
+              'mini-next-cpp: component cannot be both client and server',
+              `file: ${abs}`,
+            ].join('\n'),
+          );
+        }
+        const byDirective = hasClient ? 'client' : hasServer ? 'server' : null;
+        if (byDirective && byDirective !== byName) {
+          throw new Error(
+            [
+              'mini-next-cpp: component kind conflict between filename and directive',
+              `file: ${abs}`,
+              `filenameKind: ${byName}`,
+              `directiveKind: ${byDirective}`,
+            ].join('\n'),
+          );
+        }
+      }
+      moduleKindByFilename.set(abs, byName);
+      return byName;
+    }
 
     let src = sourceIfKnown;
     if (src == null) {
@@ -157,9 +241,19 @@ function createPagesCompiler(pagesDir) {
       }
     }
 
-    const directive = detectDirectiveString(src);
-    const kind = directive === 'use client' ? 'client' : directive === 'use server' ? 'server' : null;
-    if (kind) moduleKindByFilename.set(abs, kind);
+    const directives = detectDirectivePrologue(src);
+    const hasClient = directives.includes('use client');
+    const hasServer = directives.includes('use server');
+    if (hasClient && hasServer) {
+      throw new Error(
+        [
+          'mini-next-cpp: component cannot be both client and server',
+          `file: ${abs}`,
+        ].join('\n'),
+      );
+    }
+    const kind = hasClient ? 'client' : hasServer ? 'server' : null;
+    moduleKindByFilename.set(abs, kind || 'unknown');
     return kind;
   }
 
@@ -168,13 +262,12 @@ function createPagesCompiler(pagesDir) {
     if (parentKind !== 'client') return;
     const targetKind = getModuleKind(targetFilename);
     if (targetKind !== 'server') return;
-    throw new Error(
-      [
-        'mini-next-cpp: client component cannot import server component',
-        `from: ${String(parentFilename || '')}`,
-        `import: ${String(targetFilename || '')}`,
-      ].join('\\n'),
-    );
+    throw new MiniNextComponentBoundaryError({
+      importer: parentFilename,
+      imported: targetFilename,
+      importerKind: stringifyKindDetection(parentFilename, parentKind),
+      importedKind: stringifyKindDetection(targetFilename, targetKind),
+    });
   }
 
   function hashSource(source) {
@@ -233,6 +326,7 @@ function createPagesCompiler(pagesDir) {
     const isTsx = ext === '.tsx';
     const isJsx = ext === '.jsx' || ext === '.tsx';
     const isJsxFile = ext === '.jsx';
+    const mayContainJsx = ext === '.jsx' || ext === '.tsx' || ext === '.js' || ext === '.cjs';
 
     const outPath = outputPathFor(filename, sourceHash);
     if (fs.existsSync(outPath)) {
@@ -254,7 +348,7 @@ function createPagesCompiler(pagesDir) {
     if (isTs) {
       presets.push([require.resolve('@babel/preset-typescript'), { isTSX: isTsx && !usedNativeJsx, allExtensions: true }]);
     }
-    if (!usedNativeJsx && (isJsx || ext === '.js')) {
+    if (!usedNativeJsx && (isJsx || mayContainJsx)) {
       presets.push([require.resolve('@babel/preset-react'), { runtime: 'automatic' }]);
     }
 
@@ -338,11 +432,24 @@ function createPagesCompiler(pagesDir) {
       }
       compileAndLoad(mod, filename);
     };
+
+    Module._extensions['.cjs'] = (mod, filename) => {
+      if (!isUnderPagesDir(filename)) {
+        if (typeof originalCjsExtension === 'function') return originalCjsExtension(mod, filename);
+        return originalJsExtension(mod, filename);
+      }
+      compileAndLoad(mod, filename);
+    };
   }
 
   function dispose() {
     Module._load = originalModuleLoad;
     Module._extensions['.js'] = originalJsExtension;
+    if (typeof originalCjsExtension === 'function') {
+      Module._extensions['.cjs'] = originalCjsExtension;
+    } else {
+      delete Module._extensions['.cjs'];
+    }
     if (typeof originalJsxExtension === 'function') {
       Module._extensions['.jsx'] = originalJsxExtension;
     } else {

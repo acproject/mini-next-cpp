@@ -29,6 +29,7 @@ async function main() {
     writeFile(path.join(pagesDir, '[[...root]].js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, '[...slug].js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'a.js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, 'c.cjs'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'blog', 'index.js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'blog', '[[...slug]].js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'user', 'index.js'), 'module.exports = () => null;');
@@ -50,6 +51,10 @@ async function main() {
     const m1c = rm.match('/a');
     assert.strictEqual(m1c.matched, true);
     assert.strictEqual(m1c.filePath, path.join(pagesDir, 'a.js'));
+
+    const m1d = rm.match('/c');
+    assert.strictEqual(m1d.matched, true);
+    assert.strictEqual(m1d.filePath, path.join(pagesDir, 'c.cjs'));
 
     const m2 = rm.match('/blog');
     assert.strictEqual(m2.matched, true);
@@ -646,16 +651,20 @@ async function main() {
       ].join('\n'));
 
       writeFile(path.join(rootDir, 'components', 'client.js'), [
+        "'use strict';",
         "'use client';",
         "module.exports = () => 'client';",
         '',
       ].join('\n'));
       writeFile(path.join(rootDir, 'components', 'server_only.js'), [
+        '/* x */',
         "'use server';",
         "module.exports = () => 'server';",
         '',
       ].join('\n'));
       writeFile(path.join(rootDir, 'components', 'client_bad.js'), [
+        '#!/usr/bin/env node',
+        "'use strict';",
         "'use client';",
         "require('./server_only');",
         "module.exports = () => 'client-bad';",

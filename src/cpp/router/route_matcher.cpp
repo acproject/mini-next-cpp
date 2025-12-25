@@ -169,7 +169,8 @@ void RouteMatcher::scanFilesystem() {
 
     const auto path = entry.path();
     const auto ext = path.extension().string();
-    if (ext != ".js" && ext != ".jsx" && ext != ".ts" && ext != ".tsx") {
+    if (ext != ".js" && ext != ".jsx" && ext != ".ts" && ext != ".tsx" &&
+        ext != ".cjs") {
       continue;
     }
 
