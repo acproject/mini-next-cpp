@@ -31,7 +31,10 @@ async function main() {
     writeFile(path.join(pagesDir, 'a.js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'blog', 'index.js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'blog', '[[...slug]].js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, 'user', 'index.js'), 'module.exports = () => null;');
     writeFile(path.join(pagesDir, 'user', '[id].js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, 'tabs', 'index.js'), 'module.exports = () => null;');
+    writeFile(path.join(pagesDir, 'tabs', '[[tab]].js'), 'module.exports = () => null;');
 
     const rm = new native.RouteMatcher(pagesDir);
 
@@ -61,6 +64,15 @@ async function main() {
     assert.strictEqual(m3.matched, true);
     assert.strictEqual(m3.filePath, path.join(pagesDir, 'user', '[id].js'));
     assert.deepStrictEqual(m3.params, { id: '123' });
+
+    const m4 = rm.match('/user');
+    assert.strictEqual(m4.matched, true);
+    assert.strictEqual(m4.filePath, path.join(pagesDir, 'user', 'index.js'));
+
+    const m5 = rm.match('/tabs/settings');
+    assert.strictEqual(m5.matched, true);
+    assert.strictEqual(m5.filePath, path.join(pagesDir, 'tabs', '[[tab]].js'));
+    assert.deepStrictEqual(m5.params, { tab: 'settings' });
   });
 
   withTempDir((pagesDir) => {
@@ -76,6 +88,17 @@ async function main() {
     assert.strictEqual(r2.matched, true);
     assert.strictEqual(r2.filePath, path.join(pagesDir, '[[...slug]].js'));
     assert.deepStrictEqual(r2.params, { slug: 'a/b' });
+  });
+
+  withTempDir((pagesDir) => {
+    writeFile(path.join(pagesDir, 'tabs', '[[tab]].js'), 'module.exports = () => null;');
+    const rm = new native.RouteMatcher(pagesDir);
+
+    const r1 = rm.match('/tabs');
+    assert.strictEqual(r1.matched, true);
+    assert.strictEqual(r1.filePath, path.join(pagesDir, 'tabs', '[[tab]].js'));
+    assert.ok(Object.prototype.hasOwnProperty.call(r1.params, 'tab'));
+    assert.strictEqual(r1.params.tab, undefined);
   });
 
   {
@@ -576,6 +599,93 @@ async function main() {
           const r2 = await get('/missing');
           assert.strictEqual(r2.status, 418);
           assert.ok(r2.body.includes('teapot'));
+        } catch (e) {
+          server.close(() => {
+            try {
+              close();
+            } finally {
+              fs.rmSync(rootDir, { recursive: true, force: true });
+              reject(e);
+            }
+          });
+          return;
+        }
+
+        server.close(() => {
+          try {
+            close();
+          } finally {
+            fs.rmSync(rootDir, { recursive: true, force: true });
+            resolve();
+          }
+        });
+      });
+    } catch (e) {
+      try {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      } finally {
+        reject(e);
+      }
+    }
+  });
+
+  await new Promise((resolve, reject) => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-next-cpp-client-server-boundary-'));
+    const pagesDir = path.join(rootDir, 'pages');
+    const publicDir = path.join(rootDir, 'public');
+    try {
+      writeFile(path.join(pagesDir, 'index.js'), [
+        "require('../components/client');",
+        "module.exports = () => 'ok';",
+        '',
+      ].join('\n'));
+      writeFile(path.join(pagesDir, 'bad.js'), [
+        "require('../components/client_bad');",
+        "module.exports = () => 'bad';",
+        '',
+      ].join('\n'));
+
+      writeFile(path.join(rootDir, 'components', 'client.js'), [
+        "'use client';",
+        "module.exports = () => 'client';",
+        '',
+      ].join('\n'));
+      writeFile(path.join(rootDir, 'components', 'server_only.js'), [
+        "'use server';",
+        "module.exports = () => 'server';",
+        '',
+      ].join('\n'));
+      writeFile(path.join(rootDir, 'components', 'client_bad.js'), [
+        "'use client';",
+        "require('./server_only');",
+        "module.exports = () => 'client-bad';",
+        '',
+      ].join('\n'));
+
+      const http = require('http');
+      const { createMiniNextServer } = require('../js/server');
+      const { app, close } = createMiniNextServer({ pagesDir, publicDir, isProd: true, ssrCacheSize: 8, isrCacheSize: 8 });
+      const server = app.listen(0, async () => {
+        const port = server.address().port;
+        const get = (p) => new Promise((res, rej) => {
+          const req = http.request({ hostname: '127.0.0.1', port, path: p, method: 'GET' }, (r) => {
+            let data = '';
+            r.setEncoding('utf8');
+            r.on('data', (c) => (data += c));
+            r.on('end', () => res({ status: r.statusCode, body: data }));
+          });
+          req.on('error', rej);
+          req.end();
+        });
+
+        try {
+          const r1 = await get('/');
+          assert.strictEqual(r1.status, 200);
+          assert.ok(r1.body.includes('ok'));
+
+          const r2 = await get('/bad');
+          assert.strictEqual(r2.status, 500);
+          assert.ok(r2.body.includes('client component cannot import server component'));
         } catch (e) {
           server.close(() => {
             try {

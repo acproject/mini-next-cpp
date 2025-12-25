@@ -39,11 +39,13 @@ function pickRenderer(native, options = {}) {
 function createPagesCompiler(pagesDir) {
   const babel = require('@babel/core');
   const compiledByFilename = new Map();
+  const moduleKindByFilename = new Map();
   const watchedPrefix = path.resolve(pagesDir) + path.sep;
   const originalJsExtension = Module._extensions['.js'];
   const originalJsxExtension = Module._extensions['.jsx'];
   const originalTsExtension = Module._extensions['.ts'];
   const originalTsxExtension = Module._extensions['.tsx'];
+  const originalModuleLoad = Module._load;
   const cacheDir = path.join(process.cwd(), '.mini-next', 'pages-cache');
   const useNativeJsxCompiler = String(process.env.JSX_COMPILER || '') === 'native';
   let nativeJsx = null;
@@ -66,6 +68,113 @@ function createPagesCompiler(pagesDir) {
   function isInNodeModules(filename) {
     const abs = path.resolve(filename);
     return abs.includes(`${path.sep}node_modules${path.sep}`);
+  }
+
+  function detectModuleKindByName(filename) {
+    const name = String(filename || '');
+    if (name.includes('.client.')) return 'client';
+    if (name.includes('.server.')) return 'server';
+    return null;
+  }
+
+  function detectDirectiveString(source) {
+    const s = String(source || '');
+    const n = s.length;
+    let i = 0;
+    if (n >= 1 && s.charCodeAt(0) === 0xfeff) i++;
+
+    while (i < n) {
+      const c = s.charCodeAt(i);
+      if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) {
+        i++;
+        continue;
+      }
+      if (c === 0x2f && i + 1 < n) {
+        const n1 = s.charCodeAt(i + 1);
+        if (n1 === 0x2f) {
+          i += 2;
+          while (i < n && s.charCodeAt(i) !== 0x0a) i++;
+          continue;
+        }
+        if (n1 === 0x2a) {
+          i += 2;
+          while (i + 1 < n) {
+            if (s.charCodeAt(i) === 0x2a && s.charCodeAt(i + 1) === 0x2f) {
+              i += 2;
+              break;
+            }
+            i++;
+          }
+          continue;
+        }
+      }
+      break;
+    }
+
+    if (i >= n) return null;
+    const q = s[i];
+    if (q !== '"' && q !== "'") return null;
+    i++;
+    let out = '';
+    while (i < n) {
+      const ch = s[i];
+      if (ch === q) break;
+      if (ch === '\\\\') return null;
+      out += ch;
+      i++;
+    }
+    if (i >= n) return null;
+    i++;
+    while (i < n) {
+      const c = s.charCodeAt(i);
+      if (c === 0x20 || c === 0x09) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    if (i < n && s[i] === ';') i++;
+    return out;
+  }
+
+  function getModuleKind(filename, sourceIfKnown) {
+    if (!filename) return null;
+    const abs = path.resolve(filename);
+    if (isInNodeModules(abs)) return null;
+
+    const byName = detectModuleKindByName(abs);
+    if (byName) return byName;
+
+    const cached = moduleKindByFilename.get(abs);
+    if (cached) return cached;
+
+    let src = sourceIfKnown;
+    if (src == null) {
+      try {
+        src = fs.readFileSync(abs, 'utf8');
+      } catch (_) {
+        src = null;
+      }
+    }
+
+    const directive = detectDirectiveString(src);
+    const kind = directive === 'use client' ? 'client' : directive === 'use server' ? 'server' : null;
+    if (kind) moduleKindByFilename.set(abs, kind);
+    return kind;
+  }
+
+  function enforceClientServerBoundary(parentFilename, targetFilename) {
+    const parentKind = getModuleKind(parentFilename);
+    if (parentKind !== 'client') return;
+    const targetKind = getModuleKind(targetFilename);
+    if (targetKind !== 'server') return;
+    throw new Error(
+      [
+        'mini-next-cpp: client component cannot import server component',
+        `from: ${String(parentFilename || '')}`,
+        `import: ${String(targetFilename || '')}`,
+      ].join('\\n'),
+    );
   }
 
   function hashSource(source) {
@@ -116,6 +225,7 @@ function createPagesCompiler(pagesDir) {
     }
 
     const source = fs.readFileSync(filename, 'utf8');
+    getModuleKind(filename, source);
     const sourceHash = hashSource(source);
 
     const ext = String(path.extname(filename) || '').toLowerCase();
@@ -176,6 +286,22 @@ function createPagesCompiler(pagesDir) {
   }
 
   function install() {
+    Module._load = (request, parent, isMain) => {
+      const parentFilename = parent && typeof parent.filename === 'string' ? parent.filename : null;
+      if (parentFilename) {
+        let resolved = null;
+        try {
+          resolved = Module._resolveFilename(request, parent, isMain);
+        } catch (_) {
+          resolved = null;
+        }
+        if (resolved && typeof resolved === 'string' && path.isAbsolute(resolved)) {
+          enforceClientServerBoundary(parentFilename, resolved);
+        }
+      }
+      return originalModuleLoad(request, parent, isMain);
+    };
+
     Module._extensions['.jsx'] = (mod, filename) => {
       if (isInNodeModules(filename)) {
         if (typeof originalJsxExtension === 'function') return originalJsxExtension(mod, filename);
@@ -215,6 +341,7 @@ function createPagesCompiler(pagesDir) {
   }
 
   function dispose() {
+    Module._load = originalModuleLoad;
     Module._extensions['.js'] = originalJsExtension;
     if (typeof originalJsxExtension === 'function') {
       Module._extensions['.jsx'] = originalJsxExtension;
@@ -244,12 +371,14 @@ function createPagesCompiler(pagesDir) {
         }
       }
       compiledByFilename.delete(filePath);
+      moduleKindByFilename.delete(path.resolve(filePath));
       try {
         delete require.cache[require.resolve(filePath)];
       } catch (_) {
       }
     } else {
       compiledByFilename.clear();
+      moduleKindByFilename.clear();
     }
   }
 

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_map>
@@ -16,8 +17,10 @@ RouteMatcher::RouteMatcher(const std::string &pagesDir) : pagesDir_(pagesDir) {
 static int segmentRank(RouteSegmentKind k) {
   switch (k) {
   case RouteSegmentKind::Static:
-    return 3;
+    return 4;
   case RouteSegmentKind::Dynamic:
+    return 3;
+  case RouteSegmentKind::OptionalDynamic:
     return 2;
   case RouteSegmentKind::CatchAll:
     return 1;
@@ -62,14 +65,15 @@ void RouteMatcher::addRoute(const std::string &route,
   r.isDynamic = route.find('[') != std::string::npos;
 
   bool valid = true;
-  r.regexPattern = compileRoutePattern(route, r.segments, r.paramNames, valid);
+  r.regexPattern =
+      compileRoutePattern(route, r.segments, r.paramNames, r.paramKinds, valid);
   if (!valid) {
     return;
   }
   routes_.push_back(r);
 }
 
-std::pair<bool, std::unordered_map<std::string, std::string>>
+std::pair<bool, std::unordered_map<std::string, std::optional<std::string>>>
 RouteMatcher::match(const std::string &url) {
   auto result = matchRoute(url);
   return {result.matched, std::move(result.params)};
@@ -97,6 +101,10 @@ MatchResult RouteMatcher::matchRoute(const std::string &url) {
           if (i + 1 < matches.size()) {
             if (matches[i + 1].matched) {
               result.params[route.paramNames[i]] = matches[i + 1].str();
+            } else if (i < route.paramKinds.size() &&
+                       route.paramKinds[i] ==
+                           RouteSegmentKind::OptionalDynamic) {
+              result.params[route.paramNames[i]] = std::nullopt;
             }
           }
         }
@@ -128,6 +136,9 @@ MatchResult RouteMatcher::matchRoute(const std::string &url) {
       if (i + 1 < matches.size()) {
         if (matches[i + 1].matched) {
           result.params[route.paramNames[i]] = matches[i + 1].str();
+        } else if (i < route.paramKinds.size() &&
+                   route.paramKinds[i] == RouteSegmentKind::OptionalDynamic) {
+          result.params[route.paramNames[i]] = std::nullopt;
         }
       }
     }
@@ -211,12 +222,13 @@ void RouteMatcher::scanFilesystem() {
             });
 }
 
-std::regex RouteMatcher::compileRoutePattern(const std::string &route,
-                                             std::vector<RouteSegment> &outSegments,
-                                             std::vector<std::string> &outParamNames,
-                                             bool &outValid) {
+std::regex RouteMatcher::compileRoutePattern(
+    const std::string &route, std::vector<RouteSegment> &outSegments,
+    std::vector<std::string> &outParamNames,
+    std::vector<RouteSegmentKind> &outParamKinds, bool &outValid) {
   outSegments.clear();
   outParamNames.clear();
+  outParamKinds.clear();
   outValid = true;
 
   if (route.empty() || route[0] != '/') {
@@ -269,10 +281,33 @@ std::regex RouteMatcher::compileRoutePattern(const std::string &route,
       }
       outSegments.push_back({RouteSegmentKind::OptionalCatchAll, name});
       outParamNames.push_back(name);
+      outParamKinds.push_back(RouteSegmentKind::OptionalCatchAll);
       if (segs.size() == 1) {
         pattern.append("/(?:(.+))?");
       } else {
         pattern.append("(?:/(.+))?");
+      }
+      continue;
+    }
+
+    if (seg.size() >= 4 && seg.rfind("[[", 0) == 0 &&
+        seg.substr(seg.size() - 2) == "]]") {
+      if (!isLast) {
+        outValid = false;
+        return std::regex();
+      }
+      const std::string name = seg.substr(2, seg.size() - 4);
+      if (name.empty()) {
+        outValid = false;
+        return std::regex();
+      }
+      outSegments.push_back({RouteSegmentKind::OptionalDynamic, name});
+      outParamNames.push_back(name);
+      outParamKinds.push_back(RouteSegmentKind::OptionalDynamic);
+      if (segs.size() == 1) {
+        pattern.append("/(?:([^/]+))?");
+      } else {
+        pattern.append("(?:/([^/]+))?");
       }
       continue;
     }
@@ -291,6 +326,7 @@ std::regex RouteMatcher::compileRoutePattern(const std::string &route,
       }
       outSegments.push_back({RouteSegmentKind::CatchAll, name});
       outParamNames.push_back(name);
+      outParamKinds.push_back(RouteSegmentKind::CatchAll);
       pattern.append("(.+)");
       continue;
     }
@@ -303,6 +339,7 @@ std::regex RouteMatcher::compileRoutePattern(const std::string &route,
       }
       outSegments.push_back({RouteSegmentKind::Dynamic, name});
       outParamNames.push_back(name);
+      outParamKinds.push_back(RouteSegmentKind::Dynamic);
       pattern.append("([^/]+)");
       continue;
     }

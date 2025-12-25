@@ -69,7 +69,11 @@ private:
 
     Napi::Object params = Napi::Object::New(env);
     for (const auto &kv : result.params) {
-      params.Set(kv.first, kv.second);
+      if (kv.second.has_value()) {
+        params.Set(kv.first, Napi::String::New(env, kv.second.value()));
+      } else {
+        params.Set(kv.first, env.Undefined());
+      }
     }
     out.Set("params", params);
     return out;

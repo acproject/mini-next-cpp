@@ -58,16 +58,21 @@ npm run dev
 | 语法 | 是否支持 | 说明 |
 | --- | --- | --- |
 | `[id]` | 支持 | 单段动态参数（`/user/123` -> `{ id: "123" }`） |
+| `[[id]]`（可选段） | 支持 | 0 或 1 段参数（`/user` -> `{ id: undefined }`；`/user/a` -> `{ id: "a" }`），只能出现在最后一段 |
 | `[...slug]`（catch-all） | 支持 | 多段参数（`/a/b` -> `{ slug: "a/b" }`），只能出现在最后一段 |
 | `[[...slug]]`（可选 catch-all） | 支持 | 0 或多段参数（`/blog` 不产生参数；`/blog/a` -> `{ slug: "a" }`），只能出现在最后一段 |
-| 可选段（如 `[[id]]`） | 不支持 | 未实现 |
 
 ### 路由优先级/冲突规则
 
 路由会在扫描完成后进行一次排序，匹配时按优先级从高到低尝试（遇到第一个匹配即返回）：
 
-- 静态段 > 单段动态 `[id]` > catch-all `[...slug]` > 可选 catch-all `[[...slug]]`
+- 静态段 > 单段动态 `[id]` > 可选段 `[[id]]` > catch-all `[...slug]` > 可选 catch-all `[[...slug]]`
 - 相同前缀下，更短的路径优先（例如 `/blog` 优先于 `/blog/[[...slug]]`）
+
+说明：
+
+- “可选段”（`[[id]]`）未匹配到时会显式返回 `undefined`（用于状态型 URL）
+- 使用可选段参数时避免直接访问 `params.id.length`，推荐写法：`(params.id ?? '').length` 或 `params.id?.length`
 
 ## 页面模块与数据函数
 
@@ -95,6 +100,19 @@ Page.getStaticProps = async () => {
 
 - 默认编译链路（Babel）支持 `.jsx` 与 `.tsx`
 - `JSX_COMPILER=native` 仅对 `.jsx` 启用原生 JSX 编译（`.tsx` 仍走 Babel）
+
+## 客户端/服务端组件（实验）
+
+通过文件头部指令来标记组件类型：
+
+- 客户端组件：文件第一条语句为 `'use client'` 或 `"use client"`
+- 服务端组件：文件第一条语句为 `'use server'` 或 `"use server"`
+- 也支持文件名后缀：`*.client.*` / `*.server.*`
+
+约束规则：
+
+- 客户端组件不能 `require/import` 服务端组件
+- 服务端组件可以 `require/import` 客户端组件
 
 ## 图片代理（/_mini_next/image）
 
