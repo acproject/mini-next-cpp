@@ -649,6 +649,16 @@ async function main() {
         "module.exports = () => 'bad';",
         '',
       ].join('\n'));
+      writeFile(path.join(pagesDir, 'builtin.js'), [
+        "require('../components/client_fs');",
+        "module.exports = () => 'builtin';",
+        '',
+      ].join('\n'));
+      writeFile(path.join(pagesDir, 'proc.js'), [
+        "require('../components/client_process');",
+        "module.exports = () => 'proc';",
+        '',
+      ].join('\n'));
 
       writeFile(path.join(rootDir, 'components', 'client.js'), [
         "'use strict';",
@@ -668,6 +678,17 @@ async function main() {
         "'use client';",
         "require('./server_only');",
         "module.exports = () => 'client-bad';",
+        '',
+      ].join('\n'));
+      writeFile(path.join(rootDir, 'components', 'client_fs.js'), [
+        "'use client';",
+        "require('fs');",
+        "module.exports = () => 'client-fs';",
+        '',
+      ].join('\n'));
+      writeFile(path.join(rootDir, 'components', 'client_process.js'), [
+        "'use client';",
+        "module.exports = () => String(process.env.NODE_ENV || '');",
         '',
       ].join('\n'));
 
@@ -695,6 +716,16 @@ async function main() {
           const r2 = await get('/bad');
           assert.strictEqual(r2.status, 500);
           assert.ok(r2.body.includes('client component cannot import server component'));
+
+          const r3 = await get('/builtin');
+          assert.strictEqual(r3.status, 500);
+          assert.ok(r3.body.includes('client component cannot use Node.js-only API'));
+          assert.ok(r3.body.includes('builtin:fs'));
+
+          const r4 = await get('/proc');
+          assert.strictEqual(r4.status, 500);
+          assert.ok(r4.body.includes('client component cannot use Node.js-only API'));
+          assert.ok(r4.body.includes('api: process'));
         } catch (e) {
           server.close(() => {
             try {

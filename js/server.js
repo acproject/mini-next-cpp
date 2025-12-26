@@ -47,6 +47,7 @@ function createPagesCompiler(pagesDir) {
   const originalTsExtension = Module._extensions['.ts'];
   const originalTsxExtension = Module._extensions['.tsx'];
   const originalModuleLoad = Module._load;
+  const builtinModules = new Set(Array.isArray(Module.builtinModules) ? Module.builtinModules : []);
   const cacheDir = path.join(process.cwd(), '.mini-next', 'pages-cache');
   const useNativeJsxCompiler = String(process.env.JSX_COMPILER || '') === 'native';
   let nativeJsx = null;
@@ -194,6 +195,99 @@ function createPagesCompiler(pagesDir) {
     }
   }
 
+  class MiniNextClientDisallowedApiError extends Error {
+    constructor(details) {
+      const importer = String(details && details.importer ? details.importer : '');
+      const api = String(details && details.api ? details.api : '');
+      super(
+        [
+          'mini-next-cpp: client component cannot use Node.js-only API',
+          `from: ${importer}`,
+          `api: ${api}`,
+        ].join('\n'),
+      );
+      this.name = 'MiniNextClientDisallowedApiError';
+      this.code = 'MINI_NEXT_CLIENT_DISALLOWED_API';
+    }
+  }
+
+  function isNodeBuiltinRequest(request) {
+    if (!request || typeof request !== 'string') return false;
+    if (builtinModules.has(request)) return true;
+    if (request.startsWith('node:') && builtinModules.has(request.slice(5))) return true;
+    if (!request.startsWith('node:') && builtinModules.has(`node:${request}`)) return true;
+    return false;
+  }
+
+  function astHasForbiddenNodeOnlyApi(ast) {
+    let hit = null;
+
+    const isId = (n, name) => !!n && n.type === 'Identifier' && n.name === name;
+    const isStr = (n, value) => !!n && n.type === 'StringLiteral' && n.value === value;
+
+    const isGlobalObject = (n) => isId(n, 'globalThis') || isId(n, 'global');
+
+    const visit = (node) => {
+      if (!node || hit) return;
+      if (Array.isArray(node)) {
+        for (const it of node) visit(it);
+        return;
+      }
+      if (typeof node !== 'object') return;
+
+      const t = node.type;
+      if (t === 'MemberExpression' || t === 'OptionalMemberExpression') {
+        if (isId(node.object, 'process')) {
+          hit = 'process';
+          return;
+        }
+        if (isGlobalObject(node.object)) {
+          if (!node.computed && isId(node.property, 'process')) {
+            hit = 'process';
+            return;
+          }
+          if (node.computed && isStr(node.property, 'process')) {
+            hit = 'process';
+            return;
+          }
+        }
+      }
+
+      for (const k of Object.keys(node)) {
+        if (k === 'loc' || k === 'start' || k === 'end' || k === 'extra') continue;
+        visit(node[k]);
+        if (hit) return;
+      }
+    };
+
+    visit(ast);
+    return hit;
+  }
+
+  function enforceClientSourceRestrictions(filename, source) {
+    if (source == null) return;
+    let ast = null;
+    try {
+      ast = babel.parseSync(String(source), {
+        sourceType: 'unambiguous',
+        plugins: ['jsx', 'typescript'],
+      });
+    } catch (_) {
+      ast = null;
+    }
+    if (!ast) {
+      const raw = String(source);
+      if (raw.includes('process.') || raw.includes('globalThis.process') || raw.includes('global.process')) {
+        throw new MiniNextClientDisallowedApiError({ importer: filename, api: 'process' });
+      }
+      return;
+    }
+    const api = astHasForbiddenNodeOnlyApi(ast);
+    if (api) {
+      throw new MiniNextClientDisallowedApiError({ importer: filename, api });
+    }
+  }
+
   function getModuleKind(filename, sourceIfKnown) {
     if (!filename) return null;
     const abs = path.resolve(filename);
@@ -228,6 +322,17 @@ function createPagesCompiler(pagesDir) {
           );
         }
       }
+      if (byName === 'client') {
+        let src = sourceIfKnown;
+        if (src == null) {
+          try {
+            src = fs.readFileSync(abs, 'utf8');
+          } catch (_) {
+            src = null;
+          }
+        }
+        enforceClientSourceRestrictions(abs, src);
+      }
       moduleKindByFilename.set(abs, byName);
       return byName;
     }
@@ -253,6 +358,9 @@ function createPagesCompiler(pagesDir) {
       );
     }
     const kind = hasClient ? 'client' : hasServer ? 'server' : null;
+    if (kind === 'client') {
+      enforceClientSourceRestrictions(abs, src);
+    }
     moduleKindByFilename.set(abs, kind || 'unknown');
     return kind;
   }
@@ -383,6 +491,10 @@ function createPagesCompiler(pagesDir) {
     Module._load = (request, parent, isMain) => {
       const parentFilename = parent && typeof parent.filename === 'string' ? parent.filename : null;
       if (parentFilename) {
+        const parentKind = getModuleKind(parentFilename);
+        if (parentKind === 'client' && isNodeBuiltinRequest(request)) {
+          throw new MiniNextClientDisallowedApiError({ importer: parentFilename, api: `builtin:${request}` });
+        }
         let resolved = null;
         try {
           resolved = Module._resolveFilename(request, parent, isMain);
@@ -390,6 +502,10 @@ function createPagesCompiler(pagesDir) {
           resolved = null;
         }
         if (resolved && typeof resolved === 'string' && path.isAbsolute(resolved)) {
+          const ext = String(path.extname(resolved) || '').toLowerCase();
+          if (ext === '.js' || ext === '.cjs' || ext === '.jsx' || ext === '.ts' || ext === '.tsx') {
+            getModuleKind(resolved);
+          }
           enforceClientServerBoundary(parentFilename, resolved);
         }
       }
