@@ -127,6 +127,7 @@ function buildAppPlugin({ css, ui, enableAuth }) {
   lines.push('module.exports = {');
   lines.push('  transformHtml(html) {');
   const headParts = [];
+  headParts.push('<style>:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;}</style>');
   if (css === 'tailwind') {
     headParts.push('<link rel="stylesheet" href="/tailwind.css" />');
   } else if (css === 'pico') {
@@ -134,11 +135,7 @@ function buildAppPlugin({ css, ui, enableAuth }) {
   } else if (css === 'bootstrap') {
     headParts.push('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />');
   }
-  if (headParts.length === 0) {
-    lines.push('    return html;');
-  } else {
-    lines.push(`    return injectBeforeHeadClose(html, ${JSON.stringify(headParts.join(''))});`);
-  }
+  lines.push(`    return injectBeforeHeadClose(html, ${JSON.stringify(headParts.join(''))});`);
   lines.push('  },');
   if (ui === 'preline') {
     lines.push('  getClientScripts() {');
