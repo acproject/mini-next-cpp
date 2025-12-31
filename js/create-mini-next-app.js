@@ -1098,7 +1098,7 @@ function buildMusicTemplate({ appName, typescript, css, ui, db, miniNextDependen
 
 function runCommand(cwd, cmd, args) {
   const isWin = process.platform === 'win32';
-  const c = isWin && cmd === 'npm' ? 'npm.cmd' : cmd;
+  const c = isWin && (cmd === 'npm' || cmd === 'npx') ? `${cmd}.cmd` : cmd;
   const r = childProcess.spawnSync(c, args, { cwd, stdio: 'inherit' });
   if (r.status !== 0) {
     const code = typeof r.status === 'number' ? r.status : 1;
@@ -1255,6 +1255,11 @@ async function createApp(targetDir, options = {}) {
 
   if (install) {
     runCommand(abs, 'npm', ['install']);
+    try {
+      runCommand(abs, 'npx', ['--yes', 'fix-react2shell-next']);
+    } catch (_) {
+      runCommand(abs, 'npx', ['fix-react2shell-next']);
+    }
     const needsCssBuild = tpl.files && Object.prototype.hasOwnProperty.call(tpl.files, 'tailwind.config.cjs');
     if (needsCssBuild) {
       runCommand(abs, 'npm', ['run', 'build:css']);

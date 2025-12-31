@@ -172,3 +172,4 @@ node_modules
 examples/my-app/node_modules
 examples/music-site/node_modules
 examples/*/node_modules
+projects
